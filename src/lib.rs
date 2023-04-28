@@ -8,12 +8,26 @@ use nom::{
     IResult,
 };
 use std::collections::HashMap;
+#[derive(Debug)]
+enum CreateTable {
+    Table(String),
+}
+
+#[derive(Debug)]
+enum InsertStatement {
+    IntoTable(String, Vec<String>),
+}
+
+#[derive(Debug)]
+enum SelectStatement {
+    FromTable(String),
+}
 
 #[derive(Debug)]
 enum Statement {
-    Create(String),
-    Insert(String, Vec<String>),
-    Select(String),
+    Create(CreateTable),
+    Insert(InsertStatement),
+    Select(SelectStatement),
 }
 
 fn parse_create(input: &str) -> IResult<&str, Statement> {
@@ -21,7 +35,11 @@ fn parse_create(input: &str) -> IResult<&str, Statement> {
     let (input, _) = multispace1(input)?;
     let (input, table_name) = alphanumeric1(input)?;
 
-    Ok((input, Statement::Create(table_name.to_string())))
+   
+    Ok((
+        input,
+        Statement::Create(CreateTable::Table(table_name.to_string())),
+    ))
 }
 
 fn parse_insert(input: &str) -> IResult<&str, Statement> {
@@ -36,7 +54,13 @@ fn parse_insert(input: &str) -> IResult<&str, Statement> {
     )(input)?;
 
     let values = values.into_iter().map(|value| value.to_string()).collect();
-    Ok((input, Statement::Insert(table_name.to_string(), values)))
+    Ok((
+        input,
+        Statement::Insert(InsertStatement::IntoTable(
+            table_name.to_string(),
+            values,
+        )),
+    ))
 }
 
 fn parse_select(input: &str) -> IResult<&str, Statement> {
@@ -44,7 +68,10 @@ fn parse_select(input: &str) -> IResult<&str, Statement> {
     let (input, _) = multispace1(input)?;
     let (input, table_name) = alphanumeric1(input)?;
 
-    Ok((input, Statement::Select(table_name.to_string())))
+    Ok((
+        input,
+        Statement::Select(SelectStatement::FromTable(table_name.to_string())),
+    ))
 }
 
 fn parse_statement(input: &str) -> IResult<&str, Statement> {
@@ -67,17 +94,17 @@ fn main() {
     for statement in statements {
         match parse_statement(statement) {
             Ok((_, stmt)) => match stmt {
-                Statement::Create(table_name) => {
+                Statement::Create(CreateTable::Table(table_name)) => {
                     db.insert(table_name, Vec::new());
                 }
-                Statement::Insert(table_name, values) => {
+                Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
                     if let Some(table) = db.get_mut(&table_name) {
                         table.push(values);
                     } else {
                         eprintln!("Table not found: {}", table_name);
                     }
                 }
-                Statement::Select(table_name) => {
+                Statement::Select(SelectStatement::FromTable(table_name)) => {
                     if let Some(table) = db.get(&table_name) {
                         for row in table {
                             println!("{:?}", row);
@@ -112,17 +139,17 @@ mod tests {
         for statement in statements {
             match parse_statement(statement) {
                 Ok((_, stmt)) => match stmt {
-                    Statement::Create(table_name) => {
+                    Statement::Create(CreateTable::Table(table_name)) => {
                         db.insert(table_name, Vec::new());
                     }
-                    Statement::Insert(table_name, values) => {
+                    Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
                         if let Some(table) = db.get_mut(&table_name) {
                             table.push(values);
                         } else {
                             eprintln!("Table not found: {}", table_name);
                         }
                     }
-                    Statement::Select(table_name) => {
+                    Statement::Select(SelectStatement::FromTable(table_name)) => {
                         if let Some(table) = db.get(&table_name) {
                             for row in table {
                                 println!("{:?}", row);
