@@ -13,40 +13,51 @@ struct InMemoryStorage {
     tables: HashMap<String, Vec<Vec<String>>>,
 }
 
-impl InMemoryStorage {
-    pub fn new() -> Self {
+trait Storage {
+    fn new() -> Self;
+    fn insert(&mut self, table_name: String, row: Vec<Vec<String>>);
+    fn get_table(&self, table_name: &str) -> Option<&Vec<Vec<String>>>;
+    fn get(&self, table_name: &str) -> Option<&Vec<Vec<String>>>;
+    fn get_mut(&mut self, table_name: &str) -> Option<&mut Vec<Vec<String>>>;
+    // contains_key
+    fn contains_key(&self, table_name: &str) -> bool;
+}
+
+impl Storage for InMemoryStorage {
+    fn new() -> Self {
         InMemoryStorage {
             tables: HashMap::new(),
         }
     }
 
-    fn insert(&mut self, table_name: String, values: Vec<Vec<String>>) {
-        self.tables.insert(table_name, values);
+    fn insert(&mut self, table_name: String, row: Vec<Vec<String>>) {
+        self.tables.insert(table_name, row);
     }
 
-    fn get_mut(&mut self, table_name: &String) -> Option<&mut Vec<Vec<String>>> {
-        self.tables.get_mut(table_name)
-    }
-
-    fn get(&self, table_name: &String) -> Option<&Vec<Vec<String>>> {
+    fn get_table(&self, table_name: &str) -> Option<&Vec<Vec<String>>> {
         self.tables.get(table_name)
     }
 
-    // contains_key
-    fn contains_key(&self, table_name: &String) -> bool {
+    fn get_mut(&mut self, table_name: &str) -> Option<&mut Vec<Vec<String>>> {
+        self.tables.get_mut(table_name)
+    }
+
+    fn get(&self, table_name: &str) -> Option<&Vec<Vec<String>>> {
+        self.tables.get(table_name)
+    }
+
+    fn contains_key(&self, table_name: &str) -> bool {
         self.tables.contains_key(table_name)
     }
 }
 
-struct ToyDB {
-    tables: InMemoryStorage,
+struct ToyDB<S: Storage> {
+    tables: S,
 }
 
-impl ToyDB {
+impl<S: Storage> ToyDB<S> {
     pub fn new() -> Self {
-        ToyDB {
-            tables: InMemoryStorage::new(),
-        }
+        ToyDB { tables: S::new() }
     }
 
     fn execute_statement(&mut self, stmt: Statement) {
@@ -141,7 +152,7 @@ fn parse_statement(input: &str) -> IResult<&str, Statement> {
 }
 
 fn main() {
-    let mut db = ToyDB::new();
+    let mut db: ToyDB<InMemoryStorage> = ToyDB::new();
 
     let statements = vec![
         "CREATE TABLE users",
@@ -169,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_database() {
-        let mut db = ToyDB::new();
+        let mut db: ToyDB<InMemoryStorage> = ToyDB::new();
 
         let statements = vec![
             "CREATE TABLE users",
@@ -193,6 +204,7 @@ mod tests {
 
         // Get the users table and check the number of rows
         let users = db.tables.get(&"users".to_string()).unwrap();
+        println!("{:?}", users);
         assert_eq!(users.len(), 2);
 
         // Check the contents of the users table
