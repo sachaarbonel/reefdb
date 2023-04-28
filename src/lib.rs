@@ -1,24 +1,51 @@
 use nom::{
     branch::alt,
     bytes::complete::tag,
-    multi::separated_list0,
     character::complete::{alphanumeric1, multispace0, multispace1},
     combinator::map,
+    multi::separated_list0,
     sequence::{delimited, preceded, separated_pair, terminated},
     IResult,
 };
 use std::collections::HashMap;
 
-
-
-struct ToyDB {
+struct InMemoryStorage {
     tables: HashMap<String, Vec<Vec<String>>>,
 }
 
-impl ToyDB {
-   pub fn new() -> Self {
-        ToyDB {
+impl InMemoryStorage {
+    pub fn new() -> Self {
+        InMemoryStorage {
             tables: HashMap::new(),
+        }
+    }
+
+    fn insert(&mut self, table_name: String, values: Vec<Vec<String>>) {
+        self.tables.insert(table_name, values);
+    }
+
+    fn get_mut(&mut self, table_name: &String) -> Option<&mut Vec<Vec<String>>> {
+        self.tables.get_mut(table_name)
+    }
+
+    fn get(&self, table_name: &String) -> Option<&Vec<Vec<String>>> {
+        self.tables.get(table_name)
+    }
+
+    // contains_key
+    fn contains_key(&self, table_name: &String) -> bool {
+        self.tables.contains_key(table_name)
+    }
+}
+
+struct ToyDB {
+    tables: InMemoryStorage,
+}
+
+impl ToyDB {
+    pub fn new() -> Self {
+        ToyDB {
+            tables: InMemoryStorage::new(),
         }
     }
 
@@ -74,7 +101,6 @@ fn parse_create(input: &str) -> IResult<&str, Statement> {
     let (input, _) = multispace1(input)?;
     let (input, table_name) = alphanumeric1(input)?;
 
-   
     Ok((
         input,
         Statement::Create(CreateTable::Table(table_name.to_string())),
@@ -95,10 +121,7 @@ fn parse_insert(input: &str) -> IResult<&str, Statement> {
     let values = values.into_iter().map(|value| value.to_string()).collect();
     Ok((
         input,
-        Statement::Insert(InsertStatement::IntoTable(
-            table_name.to_string(),
-            values,
-        )),
+        Statement::Insert(InsertStatement::IntoTable(table_name.to_string(), values)),
     ))
 }
 
@@ -114,10 +137,7 @@ fn parse_select(input: &str) -> IResult<&str, Statement> {
 }
 
 fn parse_statement(input: &str) -> IResult<&str, Statement> {
-    preceded(
-        multispace0,
-        alt((parse_create, parse_insert, parse_select)),
-    )(input)
+    preceded(multispace0, alt((parse_create, parse_insert, parse_select)))(input)
 }
 
 fn main() {
@@ -168,15 +188,15 @@ mod tests {
             }
         }
 
-          // Check if the users table has been created
-          assert!(db.tables.contains_key("users"));
+        // Check if the users table has been created
+        assert!(db.tables.contains_key(&"users".to_string()));
 
-          // Get the users table and check the number of rows
-          let users = db.tables.get("users").unwrap();
-          assert_eq!(users.len(), 2);
-  
-          // Check the contents of the users table
-          assert_eq!(users[0], vec!["alice", "30"]);
-          assert_eq!(users[1], vec!["bob", "28"]);
+        // Get the users table and check the number of rows
+        let users = db.tables.get(&"users".to_string()).unwrap();
+        assert_eq!(users.len(), 2);
+
+        // Check the contents of the users table
+        assert_eq!(users[0], vec!["alice", "30"]);
+        assert_eq!(users[1], vec!["bob", "28"]);
     }
 }
