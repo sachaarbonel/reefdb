@@ -8,6 +8,45 @@ use nom::{
     IResult,
 };
 use std::collections::HashMap;
+
+
+
+struct ToyDB {
+    tables: HashMap<String, Vec<Vec<String>>>,
+}
+
+impl ToyDB {
+   pub fn new() -> Self {
+        ToyDB {
+            tables: HashMap::new(),
+        }
+    }
+
+    fn execute_statement(&mut self, stmt: Statement) {
+        match stmt {
+            Statement::Create(CreateTable::Table(table_name)) => {
+                self.tables.insert(table_name, Vec::new());
+            }
+            Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
+                if let Some(table) = self.tables.get_mut(&table_name) {
+                    table.push(values);
+                } else {
+                    eprintln!("Table not found: {}", table_name);
+                }
+            }
+            Statement::Select(SelectStatement::FromTable(table_name)) => {
+                if let Some(table) = self.tables.get(&table_name) {
+                    for row in table {
+                        println!("{:?}", row);
+                    }
+                } else {
+                    eprintln!("Table not found: {}", table_name);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 enum CreateTable {
     Table(String),
@@ -82,7 +121,7 @@ fn parse_statement(input: &str) -> IResult<&str, Statement> {
 }
 
 fn main() {
-    let mut db: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+    let mut db = ToyDB::new();
 
     let statements = vec![
         "CREATE TABLE users",
@@ -93,27 +132,10 @@ fn main() {
 
     for statement in statements {
         match parse_statement(statement) {
-            Ok((_, stmt)) => match stmt {
-                Statement::Create(CreateTable::Table(table_name)) => {
-                    db.insert(table_name, Vec::new());
-                }
-                Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
-                    if let Some(table) = db.get_mut(&table_name) {
-                        table.push(values);
-                    } else {
-                        eprintln!("Table not found: {}", table_name);
-                    }
-                }
-                Statement::Select(SelectStatement::FromTable(table_name)) => {
-                    if let Some(table) = db.get(&table_name) {
-                        for row in table {
-                            println!("{:?}", row);
-                        }
-                    } else {
-                        eprintln!("Table not found: {}", table_name);
-                    }
-                }
-            },
+            Ok((_, stmt)) => {
+                // Execute the parsed statement
+                db.execute_statement(stmt);
+            }
             Err(err) => eprintln!("Failed to parse statement: {}", err),
         }
     }
@@ -127,7 +149,7 @@ mod tests {
 
     #[test]
     fn test_database() {
-        let mut db: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+        let mut db = ToyDB::new();
 
         let statements = vec![
             "CREATE TABLE users",
@@ -138,40 +160,23 @@ mod tests {
 
         for statement in statements {
             match parse_statement(statement) {
-                Ok((_, stmt)) => match stmt {
-                    Statement::Create(CreateTable::Table(table_name)) => {
-                        db.insert(table_name, Vec::new());
-                    }
-                    Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
-                        if let Some(table) = db.get_mut(&table_name) {
-                            table.push(values);
-                        } else {
-                            eprintln!("Table not found: {}", table_name);
-                        }
-                    }
-                    Statement::Select(SelectStatement::FromTable(table_name)) => {
-                        if let Some(table) = db.get(&table_name) {
-                            for row in table {
-                                println!("{:?}", row);
-                            }
-                        } else {
-                            eprintln!("Table not found: {}", table_name);
-                        }
-                    }
-                },
+                Ok((_, stmt)) => {
+                    // Execute the parsed statement
+                    db.execute_statement(stmt);
+                }
                 Err(err) => eprintln!("Failed to parse statement: {}", err),
             }
         }
 
-        // Check if the users table has been created
-        assert!(db.contains_key("users"));
+          // Check if the users table has been created
+          assert!(db.tables.contains_key("users"));
 
-        // Get the users table and check the number of rows
-        let users = db.get("users").unwrap();
-        assert_eq!(users.len(), 2);
-
-        // Check the contents of the users table
-        assert_eq!(users[0], vec!["alice", "30"]);
-        assert_eq!(users[1], vec!["bob", "28"]);
+          // Get the users table and check the number of rows
+          let users = db.tables.get("users").unwrap();
+          assert_eq!(users.len(), 2);
+  
+          // Check the contents of the users table
+          assert_eq!(users[0], vec!["alice", "30"]);
+          assert_eq!(users[1], vec!["bob", "28"]);
     }
 }
