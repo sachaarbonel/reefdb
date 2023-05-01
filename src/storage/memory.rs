@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 
+use crate::ColumnDef;
+
 use super::Storage;
 
 
+
 pub struct InMemoryStorage {
-    tables: HashMap<String, Vec<Vec<String>>>,
+    tables: HashMap<String, (Vec<ColumnDef>, Vec<Vec<String>>)>,
 }
+
 
 impl Storage for InMemoryStorage {
     fn new() -> Self {
@@ -14,19 +18,22 @@ impl Storage for InMemoryStorage {
         }
     }
 
-    fn insert(&mut self, table_name: String, row: Vec<Vec<String>>) {
-        self.tables.insert(table_name, row);
+    fn insert(&mut self, table_name: String, columns: Vec<ColumnDef>, row: Vec<Vec<String>>) {
+        self.tables.insert(table_name, (columns, row));
     }
 
-    fn get_table(&self, table_name: &str) -> Option<&Vec<Vec<String>>> {
+    fn get_table(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<String>>)> {
         self.tables.get(table_name)
     }
 
-    fn get_mut(&mut self, table_name: &str) -> Option<&mut Vec<Vec<String>>> {
+    fn get_mut(
+        &mut self,
+        table_name: &str,
+    ) -> Option<&mut (Vec<ColumnDef>, Vec<Vec<String>>)> {
         self.tables.get_mut(table_name)
     }
 
-    fn get(&self, table_name: &str) -> Option<&Vec<Vec<String>>> {
+    fn get(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<String>>)> {
         self.tables.get(table_name)
     }
 

@@ -3,14 +3,14 @@ use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{alphanumeric1, multispace0, multispace1},
-    combinator::map,
+    combinator::{map, recognize},
     multi::separated_list0,
     sequence::{delimited, preceded, separated_pair, terminated},
     IResult,
 };
-use storage::Storage;
-use storage::memory::InMemoryStorage;
 use std::collections::HashMap;
+use storage::memory::InMemoryStorage;
+use storage::Storage;
 
 struct ToyDB<S: Storage> {
     tables: S,
@@ -24,19 +24,40 @@ impl<S: Storage> ToyDB<S> {
     fn execute_statement(&mut self, stmt: Statement) {
         match stmt {
             Statement::Create(CreateTable::Table(table_name, cols)) => {
-                self.tables.insert(table_name, Vec::new());
+                self.tables.insert(table_name, cols.clone(), Vec::new());
             }
             Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
-                if let Some(table) = self.tables.get_mut(&table_name) {
+                if let Some((columns, table)) = self.tables.get_mut(&table_name) {
                     table.push(values);
                 } else {
                     eprintln!("Table not found: {}", table_name);
                 }
             }
-            Statement::Select(SelectStatement::FromTable(table_name)) => {
-                if let Some(table) = self.tables.get(&table_name) {
+            Statement::Select(SelectStatement::FromTable(table_name, columns)) => {
+                if let Some((schema, table)) = self.tables.get(&table_name) {
+                    let column_indexes: Vec<_> = columns
+                        .iter()
+                        .map(|column_name| {
+                            schema
+                                .iter()
+                                .position(|column_def| &column_def.name == column_name)
+                                .unwrap()
+                        })
+                        .collect();
+
                     for row in table {
-                        println!("{:?}", row);
+                        let selected_columns: Vec<_> = row
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, value)| {
+                                if column_indexes.contains(&i) {
+                                    Some(value)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        println!("{:?}", selected_columns);
                     }
                 } else {
                     eprintln!("Table not found: {}", table_name);
@@ -51,13 +72,13 @@ enum CreateTable {
     Table(String, Vec<ColumnDef>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ColumnDef {
     name: String,
     data_type: DataType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum DataType {
     Text,
     Integer,
@@ -70,7 +91,7 @@ enum InsertStatement {
 
 #[derive(Debug)]
 enum SelectStatement {
-    FromTable(String),
+    FromTable(String, Vec<String>),
 }
 
 #[derive(Debug)]
@@ -115,22 +136,30 @@ fn parse_insert(input: &str) -> IResult<&str, Statement> {
     ))
 }
 
+fn parse_column_list(input: &str) -> IResult<&str, Vec<String>> {
+    separated_list0(
+        terminated(tag(","), multispace0),
+        map(recognize(alphanumeric1), String::from),
+    )(input)
+}
+
 fn parse_select(input: &str) -> IResult<&str, Statement> {
-    let (input, _) = tag("SELECT * FROM")(input)?;
+    let (input, _) = tag("SELECT")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, columns) = parse_column_list(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, _) = tag("FROM")(input)?;
     let (input, _) = multispace1(input)?;
     let (input, table_name) = alphanumeric1(input)?;
 
     Ok((
         input,
-        Statement::Select(SelectStatement::FromTable(table_name.to_string())),
+        Statement::Select(SelectStatement::FromTable(table_name.to_string(), columns)),
     ))
 }
-
 fn parse_statement(input: &str) -> IResult<&str, Statement> {
     preceded(multispace0, alt((parse_create, parse_insert, parse_select)))(input)
 }
-
-
 
 fn parse_data_type(input: &str) -> IResult<&str, DataType> {
     alt((
@@ -153,7 +182,6 @@ fn parse_column_def(input: &str) -> IResult<&str, ColumnDef> {
     ))
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -168,7 +196,8 @@ mod tests {
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users (alice, 30)",
             "INSERT INTO users (bob, 28)",
-            "SELECT * FROM users",
+            "SELECT name, age FROM users",
+            "SELECT name FROM users",
         ];
 
         for statement in statements {
@@ -185,7 +214,7 @@ mod tests {
         assert!(db.tables.contains_key(&"users".to_string()));
 
         // Get the users table and check the number of rows
-        let users = db.tables.get(&"users".to_string()).unwrap();
+        let (_, users) = db.tables.get(&"users".to_string()).unwrap();
         println!("{:?}", users);
         assert_eq!(users.len(), 2);
 
