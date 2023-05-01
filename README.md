@@ -1,6 +1,4 @@
-Sure! Here's a simple `README.md` for this toy SQL database project:
 
-```
 # Toy SQL Database
 
 This project is a minimalistic, in-memory SQL-like database written in Rust. It uses the `nom` library for parsing SQL queries and supports simple SELECT, INSERT, and CREATE TABLE statements. This project serves as an educational example and is not intended for production use.
@@ -47,6 +45,3 @@ Please note that this implementation is minimal and limited, lacking many featur
 ## License
 
 This project is available under the MIT License. See the [LICENSE](LICENSE) file for more information.
-```
-
-You can create a `README.md` file in your project folder with the above content. Please adjust the example code with your `use` statement in the example based on your project structure.
