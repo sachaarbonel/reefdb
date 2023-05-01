@@ -1,3 +1,4 @@
+mod storage;
 use nom::{
     branch::alt,
     bytes::complete::tag,
@@ -7,49 +8,9 @@ use nom::{
     sequence::{delimited, preceded, separated_pair, terminated},
     IResult,
 };
+use storage::Storage;
+use storage::memory::InMemoryStorage;
 use std::collections::HashMap;
-
-struct InMemoryStorage {
-    tables: HashMap<String, Vec<Vec<String>>>,
-}
-
-trait Storage {
-    fn new() -> Self;
-    fn insert(&mut self, table_name: String, row: Vec<Vec<String>>);
-    fn get_table(&self, table_name: &str) -> Option<&Vec<Vec<String>>>;
-    fn get(&self, table_name: &str) -> Option<&Vec<Vec<String>>>;
-    fn get_mut(&mut self, table_name: &str) -> Option<&mut Vec<Vec<String>>>;
-    // contains_key
-    fn contains_key(&self, table_name: &str) -> bool;
-}
-
-impl Storage for InMemoryStorage {
-    fn new() -> Self {
-        InMemoryStorage {
-            tables: HashMap::new(),
-        }
-    }
-
-    fn insert(&mut self, table_name: String, row: Vec<Vec<String>>) {
-        self.tables.insert(table_name, row);
-    }
-
-    fn get_table(&self, table_name: &str) -> Option<&Vec<Vec<String>>> {
-        self.tables.get(table_name)
-    }
-
-    fn get_mut(&mut self, table_name: &str) -> Option<&mut Vec<Vec<String>>> {
-        self.tables.get_mut(table_name)
-    }
-
-    fn get(&self, table_name: &str) -> Option<&Vec<Vec<String>>> {
-        self.tables.get(table_name)
-    }
-
-    fn contains_key(&self, table_name: &str) -> bool {
-        self.tables.contains_key(table_name)
-    }
-}
 
 struct ToyDB<S: Storage> {
     tables: S,
@@ -62,7 +23,7 @@ impl<S: Storage> ToyDB<S> {
 
     fn execute_statement(&mut self, stmt: Statement) {
         match stmt {
-            Statement::Create(CreateTable::Table(table_name)) => {
+            Statement::Create(CreateTable::Table(table_name, cols)) => {
                 self.tables.insert(table_name, Vec::new());
             }
             Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
@@ -87,7 +48,19 @@ impl<S: Storage> ToyDB<S> {
 
 #[derive(Debug)]
 enum CreateTable {
-    Table(String),
+    Table(String, Vec<ColumnDef>),
+}
+
+#[derive(Debug)]
+struct ColumnDef {
+    name: String,
+    data_type: DataType,
+}
+
+#[derive(Debug)]
+enum DataType {
+    Text,
+    Integer,
 }
 
 #[derive(Debug)]
@@ -111,10 +84,16 @@ fn parse_create(input: &str) -> IResult<&str, Statement> {
     let (input, _) = tag("CREATE TABLE")(input)?;
     let (input, _) = multispace1(input)?;
     let (input, table_name) = alphanumeric1(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, columns) = delimited(
+        tag("("),
+        separated_list0(terminated(tag(","), multispace0), parse_column_def),
+        tag(")"),
+    )(input)?;
 
     Ok((
         input,
-        Statement::Create(CreateTable::Table(table_name.to_string())),
+        Statement::Create(CreateTable::Table(table_name.to_string(), columns)),
     ))
 }
 
@@ -151,26 +130,29 @@ fn parse_statement(input: &str) -> IResult<&str, Statement> {
     preceded(multispace0, alt((parse_create, parse_insert, parse_select)))(input)
 }
 
-fn main() {
-    let mut db: ToyDB<InMemoryStorage> = ToyDB::new();
 
-    let statements = vec![
-        "CREATE TABLE users",
-        "INSERT INTO users (alice, 30)",
-        "INSERT INTO users (bob, 28)",
-        "SELECT * FROM users",
-    ];
 
-    for statement in statements {
-        match parse_statement(statement) {
-            Ok((_, stmt)) => {
-                // Execute the parsed statement
-                db.execute_statement(stmt);
-            }
-            Err(err) => eprintln!("Failed to parse statement: {}", err),
-        }
-    }
+fn parse_data_type(input: &str) -> IResult<&str, DataType> {
+    alt((
+        map(tag("TEXT"), |_| DataType::Text),
+        map(tag("INTEGER"), |_| DataType::Integer),
+    ))(input)
 }
+
+fn parse_column_def(input: &str) -> IResult<&str, ColumnDef> {
+    let (input, name) = alphanumeric1(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, data_type) = parse_data_type(input)?;
+
+    Ok((
+        input,
+        ColumnDef {
+            name: name.to_string(),
+            data_type,
+        },
+    ))
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -183,7 +165,7 @@ mod tests {
         let mut db: ToyDB<InMemoryStorage> = ToyDB::new();
 
         let statements = vec![
-            "CREATE TABLE users",
+            "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users (alice, 30)",
             "INSERT INTO users (bob, 28)",
             "SELECT * FROM users",
