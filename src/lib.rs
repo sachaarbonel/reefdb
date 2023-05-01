@@ -3,7 +3,7 @@ use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{alphanumeric1, multispace0, multispace1},
-    combinator::{map, recognize},
+    combinator::{map, recognize, opt},
     multi::separated_list0,
     sequence::{delimited, preceded, separated_pair, terminated},
     IResult,
@@ -33,7 +33,7 @@ impl<S: Storage> ToyDB<S> {
                     eprintln!("Table not found: {}", table_name);
                 }
             }
-            Statement::Select(SelectStatement::FromTable(table_name, columns)) => {
+            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause)) => {
                 if let Some((schema, table)) = self.tables.get(&table_name) {
                     let column_indexes: Vec<_> = columns
                         .iter()
@@ -57,7 +57,21 @@ impl<S: Storage> ToyDB<S> {
                                 }
                             })
                             .collect();
-                        println!("{:?}", selected_columns);
+
+                        if let Some(where_col) = &where_clause {
+                            if let Some(col_index) = schema
+                                .iter()
+                                .position(|column_def| &column_def.name == &where_col.col_name)
+                            {
+                                if row[col_index] == where_col.value {
+                                    println!("{:?}", selected_columns);
+                                }
+                            } else {
+                                eprintln!("Column not found: {}", where_col.col_name);
+                            }
+                        } else {
+                            println!("{:?}", selected_columns);
+                        }
                     }
                 } else {
                     eprintln!("Table not found: {}", table_name);
@@ -91,7 +105,13 @@ enum InsertStatement {
 
 #[derive(Debug)]
 enum SelectStatement {
-    FromTable(String, Vec<String>),
+    FromTable(String, Vec<String>, Option<WhereClause>),
+}
+
+#[derive(Debug)]
+struct WhereClause {
+    col_name: String,
+    value: String,
 }
 
 #[derive(Debug)]
@@ -143,6 +163,24 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<String>> {
     )(input)
 }
 
+fn parse_where_clause(input: &str) -> IResult<&str, WhereClause> {
+    let (input, _) = tag("WHERE")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, col_name) = alphanumeric1(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, _) = tag("=")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, value) = alphanumeric1(input)?;
+
+    Ok((
+        input,
+        WhereClause {
+            col_name: col_name.to_string(),
+            value: value.to_string(),
+        },
+    ))
+}
+
 fn parse_select(input: &str) -> IResult<&str, Statement> {
     let (input, _) = tag("SELECT")(input)?;
     let (input, _) = multispace1(input)?;
@@ -152,9 +190,14 @@ fn parse_select(input: &str) -> IResult<&str, Statement> {
     let (input, _) = multispace1(input)?;
     let (input, table_name) = alphanumeric1(input)?;
 
+    let (input, where_clause) = opt(parse_where_clause)(input)?;
     Ok((
         input,
-        Statement::Select(SelectStatement::FromTable(table_name.to_string(), columns)),
+        Statement::Select(SelectStatement::FromTable(
+            table_name.to_string(),
+            columns,
+            where_clause,
+        )),
     ))
 }
 fn parse_statement(input: &str) -> IResult<&str, Statement> {
@@ -198,6 +241,7 @@ mod tests {
             "INSERT INTO users (bob, 28)",
             "SELECT name, age FROM users",
             "SELECT name FROM users",
+            "SELECT name FROM users WHERE age = 30",
         ];
 
         for statement in statements {
