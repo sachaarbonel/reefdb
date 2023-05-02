@@ -17,5 +17,5 @@ pub trait Storage {
         -> Option<&mut (Vec<ColumnDef>, Vec<Vec<DataValue>>)>;
     fn push_value(&mut self, table_name: &str, row: Vec<DataValue>);
 
-    fn contains_key(&self, table_name: &str) -> bool;
+    fn table_exists(&self, table_name: &str) -> bool;
 }

@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(results, expected_results);
 
         // Check if the users table has been created
-        assert!(db.tables.contains_key(&"users".to_string()));
+        assert!(db.tables.table_exists(&"users".to_string()));
 
         // Get the users table and check the number of rows
         let (_, users) = db.tables.get_table(&"users".to_string()).unwrap();
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(results, expected_results);
 
         // Check if the users table has been created
-        assert!(db.tables.contains_key(&"users".to_string()));
+        assert!(db.tables.table_exists(&"users".to_string()));
 
         // Get the users table and check the number of rows
         let (_, users) = db.tables.get_table(&"users".to_string()).unwrap();

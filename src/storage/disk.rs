@@ -72,7 +72,7 @@ impl Storage for OnDiskStorage {
         self.tables.get_mut(table_name)
     }
 
-    fn contains_key(&self, table_name: &str) -> bool {
+    fn table_exists(&self, table_name: &str) -> bool {
         self.tables.contains_key(table_name)
     }
 
