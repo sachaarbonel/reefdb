@@ -31,8 +31,8 @@ pub enum ToyDBError {
 }
 
 impl<S: Storage> ToyDB<S> {
-    pub fn new() -> Self {
-        ToyDB { tables: S::new() }
+    pub fn new(args: S::NewArgs) -> Self {
+        ToyDB { tables: S::new(args) }
     }
 
     fn execute_statement(&mut self, stmt: Statement) -> Result<ToyDBResult, ToyDBError> {
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_database() {
-        let mut db: ToyDB<InMemoryStorage> = ToyDB::new();
+        let mut db: ToyDB<InMemoryStorage> = ToyDB::new(());
 
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",

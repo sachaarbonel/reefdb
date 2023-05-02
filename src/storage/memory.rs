@@ -12,7 +12,8 @@ pub struct InMemoryStorage {
 
 
 impl Storage for InMemoryStorage {
-    fn new() -> Self {
+    type NewArgs = ();
+    fn new(_args :() ) -> Self {
         InMemoryStorage {
             tables: HashMap::new(),
         }
