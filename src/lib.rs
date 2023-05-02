@@ -23,24 +23,31 @@ pub enum ToyDBResult {
     CreateTable,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum ToyDBError {
+    TableNotFound(String),
+    ColumnNotFound(String),
+    ParseError(String),
+}
+
 impl<S: Storage> ToyDB<S> {
     pub fn new() -> Self {
         ToyDB { tables: S::new() }
     }
 
-    fn execute_statement(&mut self, stmt: Statement) -> ToyDBResult {
+    fn execute_statement(&mut self, stmt: Statement) -> Result<ToyDBResult, ToyDBError> {
         match stmt {
             Statement::Create(CreateTable::Table(table_name, cols)) => {
                 self.tables.insert(table_name, cols.clone(), Vec::new());
-                ToyDBResult::CreateTable
+                Ok(ToyDBResult::CreateTable)
             }
             Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
                 if let Some((columns, table)) = self.tables.get_mut(&table_name) {
                     table.push(values);
-                    ToyDBResult::Insert(table.len())
+                    Ok(ToyDBResult::Insert(table.len()))
                 } else {
                     eprintln!("Table not found: {}", table_name);
-                    ToyDBResult::Insert(0)
+                    Ok(ToyDBResult::Insert(0))
                 }
             }
             Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause)) => {
@@ -71,7 +78,6 @@ impl<S: Storage> ToyDB<S> {
                             .collect();
 
                         if let Some(where_col) = &where_clause {
-
                             if let Some(col_index) = schema
                                 .iter()
                                 .position(|column_def| &column_def.name == &where_col.col_name)
@@ -87,10 +93,10 @@ impl<S: Storage> ToyDB<S> {
                         }
                     }
 
-                    ToyDBResult::Select(result)
+                    Ok(ToyDBResult::Select(result))
                 } else {
-                    eprintln!("Table not found: {}", table_name);
-                    ToyDBResult::Select(Vec::new())
+                    Err(ToyDBError::TableNotFound(table_name))
+                    // ToyDBResult::Select(Vec::new())
                 }
             }
         }
@@ -270,14 +276,17 @@ mod tests {
         }
 
         let expected_results = vec![
-            ToyDBResult::CreateTable,
-            ToyDBResult::Insert(1),
-            ToyDBResult::Insert(2),
-            ToyDBResult::Select(vec![
+            Ok(ToyDBResult::CreateTable),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Insert(2)),
+            Ok(ToyDBResult::Select(vec![
                 vec!["alice".to_string(), "30".to_string()],
                 vec!["bob".to_string(), "28".to_string()],
-            ]),
-            ToyDBResult::Select(vec![vec!["alice".to_string()], vec!["bob".to_string()]]),
+            ])),
+            Ok(ToyDBResult::Select(vec![
+                vec!["alice".to_string()],
+                vec!["bob".to_string()],
+            ])),
             // ToyDBResult::Select(vec![vec!["alice".to_string()]]),
         ];
         assert_eq!(results, expected_results);
