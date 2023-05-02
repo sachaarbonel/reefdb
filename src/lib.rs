@@ -18,7 +18,7 @@ struct ToyDB<S: Storage> {
 
 #[derive(PartialEq, Debug)]
 pub enum ToyDBResult {
-    Select(Vec<Vec<String>>),
+    Select(Vec<Vec<DataValue>>),
     Insert(usize),
     CreateTable,
 }
@@ -51,6 +51,7 @@ impl<S: Storage> ToyDB<S> {
                 }
             }
             Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause)) => {
+                // println!("where_clause: {:#?}", where_clause);
                 if let Some((schema, table)) = self.tables.get(&table_name) {
                     let column_indexes: Vec<_> = columns
                         .iter()
@@ -61,6 +62,7 @@ impl<S: Storage> ToyDB<S> {
                                 .unwrap()
                         })
                         .collect();
+                    // println!("column_indexes: {:?}", column_indexes);
 
                     let mut result = Vec::new();
 
@@ -70,14 +72,15 @@ impl<S: Storage> ToyDB<S> {
                             .enumerate()
                             .filter_map(|(i, value)| {
                                 if column_indexes.contains(&i) {
-                                    Some(value.to_string())
+                                    Some(value.clone())
                                 } else {
                                     None
                                 }
                             })
                             .collect();
-
+                        // println!("row: {:?}", row);
                         if let Some(where_col) = &where_clause {
+                            // println!("where_col: {:?}", where_col);
                             if let Some(col_index) = schema
                                 .iter()
                                 .position(|column_def| &column_def.name == &where_col.col_name)
@@ -120,11 +123,16 @@ enum DataType {
     Integer,
 }
 
-#[derive(Debug)]
-enum InsertStatement {
-    IntoTable(String, Vec<String>),
+#[derive(Debug, PartialEq, Clone)]
+pub enum DataValue {
+    Text(String),
+    Integer(i32),
 }
 
+#[derive(Debug)]
+enum InsertStatement {
+    IntoTable(String, Vec<DataValue>),
+}
 #[derive(Debug)]
 enum SelectStatement {
     FromTable(String, Vec<String>, Option<WhereClause>),
@@ -133,7 +141,7 @@ enum SelectStatement {
 #[derive(Debug)]
 struct WhereClause {
     col_name: String,
-    value: String,
+    value: DataValue,
 }
 
 #[derive(Debug)]
@@ -167,15 +175,26 @@ fn parse_insert(input: &str) -> IResult<&str, Statement> {
     let (input, _) = multispace1(input)?;
     let (input, values) = delimited(
         tag("("),
-        separated_list0(terminated(tag(","), multispace0), alphanumeric1),
+        separated_list0(terminated(tag(","), multispace0), parse_data_value),
         tag(")"),
     )(input)?;
 
-    let values = values.into_iter().map(|value| value.to_string()).collect();
+    let values: Vec<DataValue> = values.into_iter().collect();
+
     Ok((
         input,
         Statement::Insert(InsertStatement::IntoTable(table_name.to_string(), values)),
     ))
+}
+
+fn parse_data_value(input: &str) -> IResult<&str, DataValue> {
+    let (input, value) = alphanumeric1(input)?;
+
+    if value.parse::<i32>().is_ok() {
+        Ok((input, DataValue::Integer(value.parse().unwrap())))
+    } else {
+        Ok((input, DataValue::Text(value.to_string())))
+    }
 }
 
 fn parse_column_list(input: &str) -> IResult<&str, Vec<String>> {
@@ -192,13 +211,13 @@ fn parse_where_clause(input: &str) -> IResult<&str, WhereClause> {
     let (input, _) = multispace1(input)?;
     let (input, _) = tag("=")(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, value) = alphanumeric1(input)?;
+    let (input, value) = parse_data_value(input)?;
 
     Ok((
         input,
         WhereClause {
             col_name: col_name.to_string(),
-            value: value.to_string(),
+            value: value,
         },
     ))
 }
@@ -212,6 +231,7 @@ fn parse_select(input: &str) -> IResult<&str, Statement> {
     let (input, _) = multispace1(input)?;
     let (input, table_name) = alphanumeric1(input)?;
 
+    let (input, _) = opt(multispace1)(input)?;
     let (input, where_clause) = opt(parse_where_clause)(input)?;
     Ok((
         input,
@@ -263,7 +283,7 @@ mod tests {
             "INSERT INTO users (bob, 28)",
             "SELECT name, age FROM users",
             "SELECT name FROM users",
-            // "SELECT name FROM users WHERE age = 30",
+            "SELECT name FROM users WHERE age = 30",
         ];
         let mut results = Vec::new();
         for statement in statements {
@@ -280,14 +300,16 @@ mod tests {
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Insert(2)),
             Ok(ToyDBResult::Select(vec![
-                vec!["alice".to_string(), "30".to_string()],
-                vec!["bob".to_string(), "28".to_string()],
+                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
+                vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)],
             ])),
             Ok(ToyDBResult::Select(vec![
-                vec!["alice".to_string()],
-                vec!["bob".to_string()],
+                vec![DataValue::Text("alice".to_string())],
+                vec![DataValue::Text("bob".to_string())],
             ])),
-            // ToyDBResult::Select(vec![vec!["alice".to_string()]]),
+            Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
+                "alice".to_string(),
+            )]])),
         ];
         assert_eq!(results, expected_results);
 
@@ -300,7 +322,13 @@ mod tests {
         assert_eq!(users.len(), 2);
 
         // Check the contents of the users table
-        assert_eq!(users[0], vec!["alice", "30"]);
-        assert_eq!(users[1], vec!["bob", "28"]);
+        assert_eq!(
+            users[0],
+            vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)]
+        );
+        assert_eq!(
+            users[1],
+            vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)]
+        );
     }
 }
