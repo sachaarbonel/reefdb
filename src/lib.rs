@@ -8,6 +8,7 @@ use nom::{
     sequence::{delimited, preceded, separated_pair, terminated},
     IResult,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use storage::memory::InMemoryStorage;
 use storage::Storage;
@@ -32,27 +33,33 @@ pub enum ToyDBError {
 
 impl<S: Storage> ToyDB<S> {
     pub fn new(args: S::NewArgs) -> Self {
-        ToyDB { tables: S::new(args) }
+        ToyDB {
+            tables: S::new(args),
+        }
     }
 
     fn execute_statement(&mut self, stmt: Statement) -> Result<ToyDBResult, ToyDBError> {
         match stmt {
             Statement::Create(CreateTable::Table(table_name, cols)) => {
-                self.tables.insert(table_name, cols.clone(), Vec::new());
+                self.tables
+                    .insert_table(table_name, cols.clone(), Vec::new());
                 Ok(ToyDBResult::CreateTable)
             }
             Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
-                if let Some((columns, table)) = self.tables.get_mut(&table_name) {
-                    table.push(values);
-                    Ok(ToyDBResult::Insert(table.len()))
-                } else {
-                    eprintln!("Table not found: {}", table_name);
-                    Ok(ToyDBResult::Insert(0))
-                }
+                self.tables.push_value(&table_name, values);
+                Ok(ToyDBResult::Insert(1))
+                // if let Some((columns, table)) = self.tables.get_table(&table_name) {
+                //     table.push(values);
+                //     self.tables.save();
+                //     Ok(ToyDBResult::Insert(table.len()))
+                // } else {
+                //     eprintln!("Table not found: {}", table_name);
+                //     Ok(ToyDBResult::Insert(0))
+                // }
             }
             Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause)) => {
                 // println!("where_clause: {:#?}", where_clause);
-                if let Some((schema, table)) = self.tables.get(&table_name) {
+                if let Some((schema, table)) = self.tables.get_table(&table_name) {
                     let column_indexes: Vec<_> = columns
                         .iter()
                         .map(|column_name| {
@@ -111,19 +118,19 @@ enum CreateTable {
     Table(String, Vec<ColumnDef>),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ColumnDef {
     name: String,
     data_type: DataType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum DataType {
     Text,
     Integer,
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum DataValue {
     Text(String),
     Integer(i32),
@@ -269,9 +276,75 @@ fn parse_column_def(input: &str) -> IResult<&str, ColumnDef> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, fs};
+
+    use crate::storage::disk::OnDiskStorage;
 
     use super::*;
+
+    #[test]
+    fn test_database_on_disk() {
+        let kv_path = "kv.db";
+
+        let mut db: ToyDB<OnDiskStorage> = ToyDB::new(kv_path.to_string());
+
+        let statements = vec![
+            "CREATE TABLE users (name TEXT, age INTEGER)",
+            "INSERT INTO users (alice, 30)",
+            "INSERT INTO users (bob, 28)",
+            "SELECT name, age FROM users",
+            "SELECT name FROM users",
+            "SELECT name FROM users WHERE age = 30",
+        ];
+        let mut results = Vec::new();
+        for statement in statements {
+            match parse_statement(statement) {
+                Ok((_, stmt)) => {
+                    results.push(db.execute_statement(stmt));
+                }
+                Err(err) => eprintln!("Failed to parse statement: {}", err),
+            }
+        }
+
+        let expected_results = vec![
+            Ok(ToyDBResult::CreateTable),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Select(vec![
+                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
+                vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)],
+            ])),
+            Ok(ToyDBResult::Select(vec![
+                vec![DataValue::Text("alice".to_string())],
+                vec![DataValue::Text("bob".to_string())],
+            ])),
+            Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
+                "alice".to_string(),
+            )]])),
+        ];
+        assert_eq!(results, expected_results);
+
+        // Check if the users table has been created
+        assert!(db.tables.contains_key(&"users".to_string()));
+
+        // Get the users table and check the number of rows
+        let (_, users) = db.tables.get_table(&"users".to_string()).unwrap();
+        // println!("{:?}", users);
+        assert_eq!(users.len(), 2);
+
+        // Check the contents of the users table
+        assert_eq!(
+            users[0],
+            vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)]
+        );
+        assert_eq!(
+            users[1],
+            vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)]
+        );
+
+        // Cleanup
+        fs::remove_file(kv_path).unwrap();
+    }
 
     #[test]
     fn test_database() {
@@ -298,7 +371,7 @@ mod tests {
         let expected_results = vec![
             Ok(ToyDBResult::CreateTable),
             Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(2)),
+            Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Select(vec![
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
                 vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)],
@@ -317,7 +390,7 @@ mod tests {
         assert!(db.tables.contains_key(&"users".to_string()));
 
         // Get the users table and check the number of rows
-        let (_, users) = db.tables.get(&"users".to_string()).unwrap();
+        let (_, users) = db.tables.get_table(&"users".to_string()).unwrap();
         // println!("{:?}", users);
         assert_eq!(users.len(), 2);
 
