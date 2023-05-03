@@ -1,7 +1,7 @@
 use nom::{branch::alt, bytes::complete::tag, combinator::map, IResult};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DataType {
     Text,
     Integer,

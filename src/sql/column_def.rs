@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::data_type::DataType;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColumnDef {
     pub name: String,
     pub data_type: DataType,
@@ -25,5 +25,22 @@ impl ColumnDef {
                 data_type,
             },
         ))
+    }
+}
+
+//test
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_column_def() {
+        let input = "id INTEGER";
+        let expected = ColumnDef {
+            name: "id".to_string(),
+            data_type: DataType::Integer,
+        };
+        let actual = ColumnDef::parse(input).unwrap().1;
+        assert_eq!(expected, actual);
     }
 }
