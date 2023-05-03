@@ -22,6 +22,7 @@ pub enum ToyDBResult {
     Select(Vec<Vec<DataValue>>),
     Insert(usize),
     CreateTable,
+    Update(usize)
 }
 
 #[derive(Debug, PartialEq)]
@@ -109,6 +110,52 @@ impl<S: Storage> ToyDB<S> {
                     // ToyDBResult::Select(Vec::new())
                 }
             }
+            Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
+                if let Some((schema, table)) = self.tables.get_table(&table_name) {
+                    let mut updated_rows = 0;
+
+                    for row in table.iter_mut() {
+                        if let Some(where_col) = &where_clause {
+                            if let Some(col_index) = schema
+                                .iter()
+                                .position(|column_def| &column_def.name == &where_col.col_name)
+                            {
+                                if row[col_index] == where_col.value {
+                                    for (col_name, new_value) in &updates {
+                                        if let Some(idx) = schema
+                                            .iter()
+                                            .position(|column_def| &column_def.name == col_name)
+                                        {
+                                            row[idx] = new_value.clone();
+                                            updated_rows += 1;
+                                        } else {
+                                            return Err(ToyDBError::ColumnNotFound(
+                                                col_name.clone(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            for (col_name, new_value) in &updates {
+                                if let Some(idx) = schema
+                                    .iter()
+                                    .position(|column_def| &column_def.name == col_name)
+                                {
+                                    row[idx] = new_value.clone();
+                                    updated_rows += 1;
+                                } else {
+                                    return Err(ToyDBError::ColumnNotFound(col_name.clone()));
+                                }
+                            }
+                        }
+                    }
+
+                    Ok(ToyDBResult::Update(updated_rows))
+                } else {
+                    Err(ToyDBError::TableNotFound(table_name))
+                }
+            }
         }
     }
 }
@@ -156,6 +203,44 @@ enum Statement {
     Create(CreateTable),
     Insert(InsertStatement),
     Select(SelectStatement),
+    Update(UpdateStatement),
+}
+
+#[derive(Debug)]
+enum UpdateStatement {
+    UpdateTable(String, Vec<(String, DataValue)>, Option<WhereClause>),
+}
+
+fn parse_update(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = tag("UPDATE")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, table_name) = alphanumeric1(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, _) = tag("SET")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, updates) =
+        separated_list0(terminated(tag(","), multispace0), parse_column_value_pair)(input)?;
+    let (input, _) = opt(multispace1)(input)?;
+    let (input, where_clause) = opt(parse_where_clause)(input)?;
+
+    Ok((
+        input,
+        Statement::Update(UpdateStatement::UpdateTable(
+            table_name.to_string(),
+            updates,
+            where_clause,
+        )),
+    ))
+}
+
+fn parse_column_value_pair(input: &str) -> IResult<&str, (String, DataValue)> {
+    let (input, col_name) = alphanumeric1(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, _) = tag("=")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, value) = parse_data_value(input)?;
+
+    Ok((input, (col_name.to_string(), value)))
 }
 
 fn parse_create(input: &str) -> IResult<&str, Statement> {
@@ -195,15 +280,24 @@ fn parse_insert(input: &str) -> IResult<&str, Statement> {
 }
 
 fn parse_data_value(input: &str) -> IResult<&str, DataValue> {
-    let (input, value) = alphanumeric1(input)?;
-
-    if value.parse::<i32>().is_ok() {
-        Ok((input, DataValue::Integer(value.parse().unwrap())))
-    } else {
-        Ok((input, DataValue::Text(value.to_string())))
-    }
+    alt((parse_quoted_text, parse_integer))(input)
 }
 
+fn parse_quoted_text(input: &str) -> IResult<&str, DataValue> {
+    let (input, value) = delimited(
+        tag("'"),
+        recognize(nom::multi::many1(nom::character::complete::none_of("'"))),
+        tag("'"),
+    )(input)?;
+
+    Ok((input, DataValue::Text(value.to_string())))
+}
+
+fn parse_integer(input: &str) -> IResult<&str, DataValue> {
+    let (input, value) = nom::character::complete::digit1(input)?;
+
+    Ok((input, DataValue::Integer(value.parse().unwrap())))
+}
 fn parse_column_list(input: &str) -> IResult<&str, Vec<String>> {
     separated_list0(
         terminated(tag(","), multispace0),
@@ -250,7 +344,7 @@ fn parse_select(input: &str) -> IResult<&str, Statement> {
     ))
 }
 fn parse_statement(input: &str) -> IResult<&str, Statement> {
-    preceded(multispace0, alt((parse_create, parse_insert, parse_select)))(input)
+    preceded(multispace0, alt((parse_create, parse_insert, parse_select,parse_update)))(input)
 }
 
 fn parse_data_type(input: &str) -> IResult<&str, DataType> {
@@ -276,7 +370,7 @@ fn parse_column_def(input: &str) -> IResult<&str, ColumnDef> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs};
+    use std::fs;
 
     use crate::storage::disk::OnDiskStorage;
 
@@ -290,8 +384,8 @@ mod tests {
 
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users (alice, 30)",
-            "INSERT INTO users (bob, 28)",
+            "INSERT INTO users ('alice', 30)",
+            "INSERT INTO users ('bob', 28)",
             "SELECT name, age FROM users",
             "SELECT name FROM users",
             "SELECT name FROM users WHERE age = 30",
@@ -352,8 +446,9 @@ mod tests {
 
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users (alice, 30)",
-            "INSERT INTO users (bob, 28)",
+            "INSERT INTO users ('alice', 30)",
+            "INSERT INTO users ('bob', 28)",
+            "UPDATE users SET age = 31 WHERE name = 'bob'",
             "SELECT name, age FROM users",
             "SELECT name FROM users",
             "SELECT name FROM users WHERE age = 30",
@@ -372,9 +467,10 @@ mod tests {
             Ok(ToyDBResult::CreateTable),
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Update(1)), // Updated 1 row
             Ok(ToyDBResult::Select(vec![
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
-                vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)],
+                vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
             ])),
             Ok(ToyDBResult::Select(vec![
                 vec![DataValue::Text("alice".to_string())],
@@ -401,7 +497,7 @@ mod tests {
         );
         assert_eq!(
             users[1],
-            vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)]
+            vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)]
         );
     }
 }
