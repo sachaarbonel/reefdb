@@ -1,4 +1,4 @@
-use crate::{ColumnDef, DataValue};
+use crate::{sql::column_def::ColumnDef, sql::data_value::DataValue};
 
 pub mod disk;
 pub mod memory;
@@ -29,6 +29,6 @@ pub trait Storage {
         table_name: &str,
         where_clause: Option<(String, DataValue)>,
     ) -> usize;
-    
+
     fn table_exists(&self, table_name: &str) -> bool;
 }

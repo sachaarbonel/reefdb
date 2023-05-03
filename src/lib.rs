@@ -1,16 +1,15 @@
 mod storage;
-use nom::{
-    branch::alt,
-    bytes::complete::tag,
-    character::complete::{alphanumeric1, multispace0, multispace1},
-    combinator::{map, opt, recognize},
-    multi::separated_list0,
-    sequence::{delimited, preceded, separated_pair, terminated},
-    IResult,
+use nom::IResult;
+mod sql;
+
+use sql::{
+    data_value::DataValue,
+    statements::{
+        create::CreateStatement, delete::DeleteStatement, insert::InsertStatement,
+        select::SelectStatement, update::UpdateStatement, Statement,
+    },
 };
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use storage::memory::InMemoryStorage;
+
 use storage::Storage;
 
 struct ToyDB<S: Storage> {
@@ -66,7 +65,7 @@ impl<S: Storage> ToyDB<S> {
                     Err(ToyDBError::TableNotFound(table_name))
                 }
             }
-            Statement::Create(CreateTable::Table(table_name, cols)) => {
+            Statement::Create(CreateStatement::Table(table_name, cols)) => {
                 self.tables
                     .insert_table(table_name, cols.clone(), Vec::new());
                 Ok(ToyDBResult::CreateTable)
@@ -132,7 +131,6 @@ impl<S: Storage> ToyDB<S> {
                     Ok(ToyDBResult::Select(result))
                 } else {
                     Err(ToyDBError::TableNotFound(table_name))
-                    
                 }
             }
             Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
@@ -145,250 +143,11 @@ impl<S: Storage> ToyDB<S> {
     }
 }
 
-#[derive(Debug)]
-enum CreateTable {
-    Table(String, Vec<ColumnDef>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ColumnDef {
-    name: String,
-    data_type: DataType,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum DataType {
-    Text,
-    Integer,
-}
-
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-pub enum DataValue {
-    Text(String),
-    Integer(i32),
-}
-
-#[derive(Debug)]
-enum InsertStatement {
-    IntoTable(String, Vec<DataValue>),
-}
-#[derive(Debug)]
-enum SelectStatement {
-    FromTable(String, Vec<String>, Option<WhereClause>),
-}
-
-#[derive(Debug)]
-struct WhereClause {
-    col_name: String,
-    value: DataValue,
-}
-
-#[derive(Debug)]
-enum Statement {
-    Create(CreateTable),
-    Insert(InsertStatement),
-    Select(SelectStatement),
-    Update(UpdateStatement),
-    Delete(DeleteStatement),
-}
-
-#[derive(Debug)]
-enum DeleteStatement {
-    FromTable(String, Option<WhereClause>),
-}
-
-fn parse_delete(input: &str) -> IResult<&str, Statement> {
-    let (input, _) = tag("DELETE FROM")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, table_name) = alphanumeric1(input)?;
-
-    let (input, _) = opt(multispace1)(input)?;
-    let (input, where_clause) = opt(parse_where_clause)(input)?;
-    Ok((
-        input,
-        Statement::Delete(DeleteStatement::FromTable(
-            table_name.to_string(),
-            where_clause,
-        )),
-    ))
-}
-
-#[derive(Debug)]
-enum UpdateStatement {
-    UpdateTable(String, Vec<(String, DataValue)>, Option<WhereClause>),
-}
-
-fn parse_update(input: &str) -> IResult<&str, Statement> {
-    let (input, _) = tag("UPDATE")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, table_name) = alphanumeric1(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, _) = tag("SET")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, updates) =
-        separated_list0(terminated(tag(","), multispace0), parse_column_value_pair)(input)?;
-    let (input, _) = opt(multispace1)(input)?;
-    let (input, where_clause) = opt(parse_where_clause)(input)?;
-
-    Ok((
-        input,
-        Statement::Update(UpdateStatement::UpdateTable(
-            table_name.to_string(),
-            updates,
-            where_clause,
-        )),
-    ))
-}
-
-fn parse_column_value_pair(input: &str) -> IResult<&str, (String, DataValue)> {
-    let (input, col_name) = alphanumeric1(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, _) = tag("=")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, value) = parse_data_value(input)?;
-
-    Ok((input, (col_name.to_string(), value)))
-}
-
-fn parse_create(input: &str) -> IResult<&str, Statement> {
-    let (input, _) = tag("CREATE TABLE")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, table_name) = alphanumeric1(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, columns) = delimited(
-        tag("("),
-        separated_list0(terminated(tag(","), multispace0), parse_column_def),
-        tag(")"),
-    )(input)?;
-
-    Ok((
-        input,
-        Statement::Create(CreateTable::Table(table_name.to_string(), columns)),
-    ))
-}
-
-fn parse_insert(input: &str) -> IResult<&str, Statement> {
-    let (input, _) = tag("INSERT INTO")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, table_name) = alphanumeric1(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, values) = delimited(
-        tag("("),
-        separated_list0(terminated(tag(","), multispace0), parse_data_value),
-        tag(")"),
-    )(input)?;
-
-    let values: Vec<DataValue> = values.into_iter().collect();
-
-    Ok((
-        input,
-        Statement::Insert(InsertStatement::IntoTable(table_name.to_string(), values)),
-    ))
-}
-
-fn parse_data_value(input: &str) -> IResult<&str, DataValue> {
-    alt((parse_quoted_text, parse_integer))(input)
-}
-
-fn parse_quoted_text(input: &str) -> IResult<&str, DataValue> {
-    let (input, value) = delimited(
-        tag("'"),
-        recognize(nom::multi::many1(nom::character::complete::none_of("'"))),
-        tag("'"),
-    )(input)?;
-
-    Ok((input, DataValue::Text(value.to_string())))
-}
-
-fn parse_integer(input: &str) -> IResult<&str, DataValue> {
-    let (input, value) = nom::character::complete::digit1(input)?;
-
-    Ok((input, DataValue::Integer(value.parse().unwrap())))
-}
-fn parse_column_list(input: &str) -> IResult<&str, Vec<String>> {
-    separated_list0(
-        terminated(tag(","), multispace0),
-        map(recognize(alphanumeric1), String::from),
-    )(input)
-}
-
-fn parse_where_clause(input: &str) -> IResult<&str, WhereClause> {
-    let (input, _) = tag("WHERE")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, col_name) = alphanumeric1(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, _) = tag("=")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, value) = parse_data_value(input)?;
-
-    Ok((
-        input,
-        WhereClause {
-            col_name: col_name.to_string(),
-            value: value,
-        },
-    ))
-}
-
-fn parse_select(input: &str) -> IResult<&str, Statement> {
-    let (input, _) = tag("SELECT")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, columns) = parse_column_list(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, _) = tag("FROM")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, table_name) = alphanumeric1(input)?;
-
-    let (input, _) = opt(multispace1)(input)?;
-    let (input, where_clause) = opt(parse_where_clause)(input)?;
-    Ok((
-        input,
-        Statement::Select(SelectStatement::FromTable(
-            table_name.to_string(),
-            columns,
-            where_clause,
-        )),
-    ))
-}
-fn parse_statement(input: &str) -> IResult<&str, Statement> {
-    preceded(
-        multispace0,
-        alt((
-            parse_create,
-            parse_insert,
-            parse_select,
-            parse_update,
-            parse_delete,
-        )),
-    )(input)
-}
-
-fn parse_data_type(input: &str) -> IResult<&str, DataType> {
-    alt((
-        map(tag("TEXT"), |_| DataType::Text),
-        map(tag("INTEGER"), |_| DataType::Integer),
-    ))(input)
-}
-
-fn parse_column_def(input: &str) -> IResult<&str, ColumnDef> {
-    let (input, name) = alphanumeric1(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, data_type) = parse_data_type(input)?;
-
-    Ok((
-        input,
-        ColumnDef {
-            name: name.to_string(),
-            data_type,
-        },
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
 
-    use crate::storage::disk::OnDiskStorage;
+    use crate::storage::{disk::OnDiskStorage, memory::InMemoryStorage};
 
     use super::*;
 
@@ -409,7 +168,7 @@ mod tests {
         ];
         let mut results = Vec::new();
         for statement in statements {
-            match parse_statement(statement) {
+            match Statement::parse(statement) {
                 Ok((_, stmt)) => {
                     results.push(db.execute_statement(stmt));
                 }
@@ -421,7 +180,7 @@ mod tests {
             Ok(ToyDBResult::CreateTable),
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Update(1)),
+            Ok(ToyDBResult::Update(2)),
             Ok(ToyDBResult::Select(vec![
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
                 vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
@@ -460,7 +219,7 @@ mod tests {
 
     //test delete
     #[test]
-    fn test_delete(){
+    fn test_delete() {
         let mut db: ToyDB<InMemoryStorage> = ToyDB::new(());
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -473,7 +232,7 @@ mod tests {
         ];
         let mut results = Vec::new();
         for statement in statements {
-            match parse_statement(statement) {
+            match Statement::parse(statement) {
                 Ok((_, stmt)) => {
                     results.push(db.execute_statement(stmt));
                 }
@@ -485,12 +244,13 @@ mod tests {
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Delete(1)),
-            Ok(ToyDBResult::Select(vec![
-                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
-            ])),
-            Ok(ToyDBResult::Select(vec![
-                vec![DataValue::Text("alice".to_string())],
-            ])),
+            Ok(ToyDBResult::Select(vec![vec![
+                DataValue::Text("alice".to_string()),
+                DataValue::Integer(30),
+            ]])),
+            Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
+                "alice".to_string(),
+            )]])),
             Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
                 "alice".to_string(),
             )]])),
@@ -513,7 +273,7 @@ mod tests {
         ];
         let mut results = Vec::new();
         for statement in statements {
-            match parse_statement(statement) {
+            match Statement::parse(statement) {
                 Ok((_, stmt)) => {
                     results.push(db.execute_statement(stmt));
                 }
@@ -525,7 +285,7 @@ mod tests {
             Ok(ToyDBResult::CreateTable),
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Update(1)), // Updated 1 row
+            Ok(ToyDBResult::Update(2)), // Updated 1 row
             Ok(ToyDBResult::Select(vec![
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
                 vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],

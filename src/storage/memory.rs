@@ -1,10 +1,8 @@
+use crate::sql::column_def::ColumnDef;
 use std::collections::HashMap;
 
-use crate::ColumnDef;
-
 use super::Storage;
-use crate::DataValue;
-
+use crate::sql::data_value::DataValue;
 pub struct InMemoryStorage {
     tables: HashMap<String, (Vec<ColumnDef>, Vec<Vec<DataValue>>)>,
 }
