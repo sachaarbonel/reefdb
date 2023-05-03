@@ -40,12 +40,6 @@ impl OnDiskStorage {
         let buffer = serialize(&self.tables).unwrap();
         writer.write_all(&buffer).unwrap();
     }
-
-    pub fn load(&mut self) {
-        let file = File::open(&self.file_path).unwrap();
-        let reader = BufReader::new(file);
-        self.tables = deserialize_from(reader).unwrap();
-    }
 }
 
 impl Storage for OnDiskStorage {
@@ -77,7 +71,6 @@ impl Storage for OnDiskStorage {
     }
 
     fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) {
-   
         let (_, rows) = self.tables.get_mut(table_name).unwrap();
         rows.push(row);
         self.save();

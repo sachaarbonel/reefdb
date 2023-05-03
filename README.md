@@ -6,7 +6,7 @@ This project is a minimalistic, in-memory SQL-like database written in Rust. It 
 ## Features
 
 - In-memory storage using a HashMap
-- Support for CREATE TABLE, INSERT, and SELECT statements
+- Support for CREATE TABLE, INSERT, UPDATE and SELECT statements
 - Nom-based parser for SQL-like syntax
 
 ## Usage
@@ -22,10 +22,10 @@ fn main() {
     let mut db = ToyDB::new();
 
     let statements = vec![
-        "CREATE TABLE users",
-        "INSERT INTO users (alice, 30)",
-        "INSERT INTO users (bob, 28)",
-        "SELECT * FROM users",
+        "CREATE TABLE users (name TEXT, age INTEGER)",
+        "INSERT INTO users ('alice', 30)",
+        "INSERT INTO users ('bob', 28)",
+        "SELECT name, age FROM users",
     ];
 
     for statement in statements {

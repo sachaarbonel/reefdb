@@ -386,6 +386,7 @@ mod tests {
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users ('alice', 30)",
             "INSERT INTO users ('bob', 28)",
+            "UPDATE users SET age = 31 WHERE name = 'bob'",
             "SELECT name, age FROM users",
             "SELECT name FROM users",
             "SELECT name FROM users WHERE age = 30",
@@ -404,9 +405,10 @@ mod tests {
             Ok(ToyDBResult::CreateTable),
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Update(1)),
             Ok(ToyDBResult::Select(vec![
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
-                vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)],
+                vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
             ])),
             Ok(ToyDBResult::Select(vec![
                 vec![DataValue::Text("alice".to_string())],
@@ -433,7 +435,7 @@ mod tests {
         );
         assert_eq!(
             users[1],
-            vec![DataValue::Text("bob".to_string()), DataValue::Integer(28)]
+            vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)]
         );
 
         // Cleanup
