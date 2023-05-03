@@ -17,5 +17,18 @@ pub trait Storage {
         -> Option<&mut (Vec<ColumnDef>, Vec<Vec<DataValue>>)>;
     fn push_value(&mut self, table_name: &str, row: Vec<DataValue>);
 
+    fn update_table(
+        &mut self,
+        table_name: &str,
+        updates: Vec<(String, DataValue)>,
+        where_clause: Option<(String, DataValue)>,
+    ) -> usize;
+
+    fn delete_table(
+        &mut self,
+        table_name: &str,
+        where_clause: Option<(String, DataValue)>,
+    ) -> usize;
+    
     fn table_exists(&self, table_name: &str) -> bool;
 }

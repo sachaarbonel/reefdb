@@ -75,4 +75,58 @@ impl Storage for OnDiskStorage {
         rows.push(row);
         self.save();
     }
+
+    fn update_table(
+        &mut self,
+        table_name: &str,
+        updates: Vec<(String, DataValue)>,
+        where_clause: Option<(String, DataValue)>,
+    ) -> usize {
+        //TODO: Option<usize>
+        // None if table doesn't exist or column not found
+        let (schema, rows) = self.get_table(table_name).unwrap();
+        let mut idx = 0;
+
+        for row in rows.iter_mut() {
+            if let Some((column, value)) = &where_clause {
+                let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
+                if row[column_idx] != *value {
+                    idx += 1;
+                    continue;
+                }
+            }
+
+            for (column, value) in &updates {
+                let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
+                row[column_idx] = value.clone();
+            }
+            idx += 1;
+        }
+        self.save();
+        idx
+    }
+
+    fn delete_table(
+        &mut self,
+        table_name: &str,
+        where_clause: Option<(String, DataValue)>,
+    ) -> usize {
+        //TODO: Option<usize>
+        // None if table doesn't exist or column not found
+        let (schema, rows) = self.get_table(table_name).unwrap();
+        let mut idx = 0;
+
+        for row in rows.iter_mut() {
+            if let Some((column, value)) = &where_clause {
+                let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
+                if row[column_idx] != *value {
+                    idx += 1;
+                    continue;
+                }
+            }
+            idx += 1;
+        }
+        self.save();
+        idx
+    }
 }

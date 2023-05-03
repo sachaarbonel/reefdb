@@ -22,7 +22,8 @@ pub enum ToyDBResult {
     Select(Vec<Vec<DataValue>>),
     Insert(usize),
     CreateTable,
-    Update(usize)
+    Update(usize),
+    Delete(usize),
 }
 
 #[derive(Debug, PartialEq)]
@@ -41,6 +42,30 @@ impl<S: Storage> ToyDB<S> {
 
     fn execute_statement(&mut self, stmt: Statement) -> Result<ToyDBResult, ToyDBError> {
         match stmt {
+            Statement::Delete(DeleteStatement::FromTable(table_name, where_clause)) => {
+                if let Some((schema, table)) = self.tables.get_table(&table_name) {
+                    let mut deleted_rows = 0;
+                    for i in (0..table.len()).rev() {
+                        if let Some(where_col) = &where_clause {
+                            if let Some(col_index) = schema
+                                .iter()
+                                .position(|column_def| &column_def.name == &where_col.col_name)
+                            {
+                                if table[i][col_index] == where_col.value {
+                                    table.remove(i);
+                                    deleted_rows += 1;
+                                }
+                            }
+                        } else {
+                            table.remove(i);
+                            deleted_rows += 1;
+                        }
+                    }
+                    Ok(ToyDBResult::Delete(deleted_rows))
+                } else {
+                    Err(ToyDBError::TableNotFound(table_name))
+                }
+            }
             Statement::Create(CreateTable::Table(table_name, cols)) => {
                 self.tables
                     .insert_table(table_name, cols.clone(), Vec::new());
@@ -107,54 +132,14 @@ impl<S: Storage> ToyDB<S> {
                     Ok(ToyDBResult::Select(result))
                 } else {
                     Err(ToyDBError::TableNotFound(table_name))
-                    // ToyDBResult::Select(Vec::new())
+                    
                 }
             }
             Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
-                if let Some((schema, table)) = self.tables.get_table(&table_name) {
-                    let mut updated_rows = 0;
-
-                    for row in table.iter_mut() {
-                        if let Some(where_col) = &where_clause {
-                            if let Some(col_index) = schema
-                                .iter()
-                                .position(|column_def| &column_def.name == &where_col.col_name)
-                            {
-                                if row[col_index] == where_col.value {
-                                    for (col_name, new_value) in &updates {
-                                        if let Some(idx) = schema
-                                            .iter()
-                                            .position(|column_def| &column_def.name == col_name)
-                                        {
-                                            row[idx] = new_value.clone();
-                                            updated_rows += 1;
-                                        } else {
-                                            return Err(ToyDBError::ColumnNotFound(
-                                                col_name.clone(),
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            for (col_name, new_value) in &updates {
-                                if let Some(idx) = schema
-                                    .iter()
-                                    .position(|column_def| &column_def.name == col_name)
-                                {
-                                    row[idx] = new_value.clone();
-                                    updated_rows += 1;
-                                } else {
-                                    return Err(ToyDBError::ColumnNotFound(col_name.clone()));
-                                }
-                            }
-                        }
-                    }
-
-                    Ok(ToyDBResult::Update(updated_rows))
-                } else {
-                    Err(ToyDBError::TableNotFound(table_name))
-                }
+                //destructuring where_clause into Option<(std::string::String, DataValue)>
+                let where_col = where_clause.map(|where_col| (where_col.col_name, where_col.value));
+                let affected_rows = self.tables.update_table(&table_name, updates, where_col);
+                Ok(ToyDBResult::Update(affected_rows))
             }
         }
     }
@@ -204,6 +189,28 @@ enum Statement {
     Insert(InsertStatement),
     Select(SelectStatement),
     Update(UpdateStatement),
+    Delete(DeleteStatement),
+}
+
+#[derive(Debug)]
+enum DeleteStatement {
+    FromTable(String, Option<WhereClause>),
+}
+
+fn parse_delete(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = tag("DELETE FROM")(input)?;
+    let (input, _) = multispace1(input)?;
+    let (input, table_name) = alphanumeric1(input)?;
+
+    let (input, _) = opt(multispace1)(input)?;
+    let (input, where_clause) = opt(parse_where_clause)(input)?;
+    Ok((
+        input,
+        Statement::Delete(DeleteStatement::FromTable(
+            table_name.to_string(),
+            where_clause,
+        )),
+    ))
 }
 
 #[derive(Debug)]
@@ -344,7 +351,16 @@ fn parse_select(input: &str) -> IResult<&str, Statement> {
     ))
 }
 fn parse_statement(input: &str) -> IResult<&str, Statement> {
-    preceded(multispace0, alt((parse_create, parse_insert, parse_select,parse_update)))(input)
+    preceded(
+        multispace0,
+        alt((
+            parse_create,
+            parse_insert,
+            parse_select,
+            parse_update,
+            parse_delete,
+        )),
+    )(input)
 }
 
 fn parse_data_type(input: &str) -> IResult<&str, DataType> {
@@ -440,6 +456,46 @@ mod tests {
 
         // Cleanup
         fs::remove_file(kv_path).unwrap();
+    }
+
+    //test delete
+    #[test]
+    fn test_delete(){
+        let mut db: ToyDB<InMemoryStorage> = ToyDB::new(());
+        let statements = vec![
+            "CREATE TABLE users (name TEXT, age INTEGER)",
+            "INSERT INTO users ('alice', 30)",
+            "INSERT INTO users ('bob', 28)",
+            "DELETE FROM users WHERE name = 'bob'",
+            "SELECT name, age FROM users",
+            "SELECT name FROM users",
+            "SELECT name FROM users WHERE age = 30",
+        ];
+        let mut results = Vec::new();
+        for statement in statements {
+            match parse_statement(statement) {
+                Ok((_, stmt)) => {
+                    results.push(db.execute_statement(stmt));
+                }
+                Err(err) => eprintln!("Failed to parse statement: {}", err),
+            }
+        }
+        let expected_results = vec![
+            Ok(ToyDBResult::CreateTable),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Delete(1)),
+            Ok(ToyDBResult::Select(vec![
+                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
+            ])),
+            Ok(ToyDBResult::Select(vec![
+                vec![DataValue::Text("alice".to_string())],
+            ])),
+            Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
+                "alice".to_string(),
+            )]])),
+        ];
+        assert_eq!(results, expected_results);
     }
 
     #[test]
