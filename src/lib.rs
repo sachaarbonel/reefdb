@@ -1,9 +1,12 @@
 mod storage;
+use indexes::inverted::InvertedIndex;
 use nom::IResult;
+mod indexes;
 mod sql;
 
 use sql::{
-    clauses::join_clause::{JoinClause, JoinType},
+    clauses::wheres::where_type::WhereType,
+    data_type::DataType,
     data_value::DataValue,
     statements::{
         create::CreateStatement, delete::DeleteStatement, insert::InsertStatement,
@@ -13,13 +16,14 @@ use sql::{
 
 use storage::Storage;
 
-struct ToyDB<S: Storage> {
+pub struct ToyDB<S: Storage> {
     tables: S,
+    inverted_index: InvertedIndex,
 }
 
 #[derive(PartialEq, Debug)]
 pub enum ToyDBResult {
-    Select(Vec<Vec<DataValue>>),
+    Select(Vec<(usize, Vec<DataValue>)>),
     Insert(usize),
     CreateTable,
     Update(usize),
@@ -37,24 +41,29 @@ impl<S: Storage> ToyDB<S> {
     pub fn new(args: S::NewArgs) -> Self {
         ToyDB {
             tables: S::new(args),
+            inverted_index: InvertedIndex::new(),
         }
     }
 
     fn execute_statement(&mut self, stmt: Statement) -> Result<ToyDBResult, ToyDBError> {
         match stmt {
-            Statement::Delete(DeleteStatement::FromTable(table_name, where_clause)) => {
+            Statement::Delete(DeleteStatement::FromTable(table_name, where_type)) => {
                 if let Some((schema, table)) = self.tables.get_table(&table_name) {
                     let mut deleted_rows = 0;
                     for i in (0..table.len()).rev() {
-                        if let Some(where_col) = &where_clause {
-                            if let Some(col_index) = schema
-                                .iter()
-                                .position(|column_def| &column_def.name == &where_col.col_name)
-                            {
-                                if table[i][col_index] == where_col.value {
-                                    table.remove(i);
-                                    deleted_rows += 1;
+                        if let Some(where_type) = &where_type {
+                            match where_type {
+                                WhereType::Regular(where_clause) => {
+                                    if let Some(col_index) = schema.iter().position(|column_def| {
+                                        &column_def.name == &where_clause.col_name
+                                    }) {
+                                        if table[i][col_index] == where_clause.value {
+                                            table.remove(i);
+                                            deleted_rows += 1;
+                                        }
+                                    }
                                 }
+                                WhereType::FTS(_) => unimplemented!(),
                             }
                         } else {
                             table.remove(i);
@@ -68,23 +77,37 @@ impl<S: Storage> ToyDB<S> {
             }
             Statement::Create(CreateStatement::Table(table_name, cols)) => {
                 self.tables
-                    .insert_table(table_name, cols.clone(), Vec::new());
+                    .insert_table(table_name.clone(), cols.clone(), Vec::new());
+
+                // Add columns with DataType::FTSText to the InvertedIndex
+                for column_def in cols.iter() {
+                    if column_def.data_type == DataType::FTSText {
+                        self.inverted_index
+                            .add_column(&table_name, &column_def.name);
+                    }
+                }
+
                 Ok(ToyDBResult::CreateTable)
             }
             Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
-                self.tables.push_value(&table_name, values);
+                let row_id = self.tables.push_value(&table_name, values.clone());
+                if let Some((schema, _)) = self.tables.get_table(&table_name) {
+                    for (i, value) in values.iter().enumerate() {
+                        if schema[i].data_type == DataType::FTSText {
+                            if let DataValue::Text(ref text) = value {
+                                self.inverted_index.add_document(
+                                    &table_name,
+                                    &schema[i].name,
+                                    row_id,
+                                    text,
+                                );
+                            }
+                        }
+                    }
+                }
                 Ok(ToyDBResult::Insert(1))
-                // if let Some((columns, table)) = self.tables.get_table(&table_name) {
-                //     table.push(values);
-                //     self.tables.save();
-                //     Ok(ToyDBResult::Insert(table.len()))
-                // } else {
-                //     eprintln!("Table not found: {}", table_name);
-                //     Ok(ToyDBResult::Insert(0))
-                // }
             }
-            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, _)) => {
-                // println!("where_clause: {:#?}", where_clause);
+            Statement::Select(SelectStatement::FromTable(table_name, columns, where_type, _)) => {
                 if let Some((schema, table)) = self.tables.get_table(&table_name) {
                     let column_indexes: Vec<_> = columns
                         .iter()
@@ -95,37 +118,73 @@ impl<S: Storage> ToyDB<S> {
                                 .unwrap()
                         })
                         .collect();
-                    // println!("column_indexes: {:?}", column_indexes);
 
                     let mut result = Vec::new();
 
-                    for row in table {
-                        let selected_columns: Vec<_> = row
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(i, value)| {
-                                if column_indexes.contains(&i) {
-                                    Some(value.clone())
-                                } else {
-                                    None
+                    if let Some(where_type) = where_type {
+                        match where_type {
+                            WhereType::FTS(fts_where) => {
+                                let row_ids = self.inverted_index.search(
+                                    &table_name,
+                                    &fts_where.col.name,
+                                    &fts_where.query,
+                                );
+                                for (rowid, row) in table.iter().enumerate() {
+                                    if row_ids.contains(&rowid) {
+                                        let selected_columns: Vec<_> = row
+                                            .iter()
+                                            .enumerate()
+                                            .filter_map(|(i, value)| {
+                                                if column_indexes.contains(&i) {
+                                                    Some(value.clone())
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect();
+                                        result.push((rowid, selected_columns));
+                                    }
                                 }
-                            })
-                            .collect();
-                        // println!("row: {:?}", row);
-                        if let Some(where_col) = &where_clause {
-                            // println!("where_col: {:?}", where_col);
-                            if let Some(col_index) = schema
-                                .iter()
-                                .position(|column_def| &column_def.name == &where_col.col_name)
-                            {
-                                if row[col_index] == where_col.value {
-                                    result.push(selected_columns);
-                                }
-                            } else {
-                                eprintln!("Column not found: {}", where_col.col_name);
                             }
-                        } else {
-                            result.push(selected_columns);
+                            WhereType::Regular(where_clause) => {
+                                for (rowid, row) in table.iter().enumerate() {
+                                    let selected_columns: Vec<_> = row
+                                        .iter()
+                                        .enumerate()
+                                        .filter_map(|(i, value)| {
+                                            if column_indexes.contains(&i) {
+                                                Some(value.clone())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+                                    if let Some(col_index) = schema.iter().position(|column_def| {
+                                        &column_def.name == &where_clause.col_name
+                                    }) {
+                                        if row[col_index] == where_clause.value {
+                                            result.push((rowid, selected_columns));
+                                        }
+                                    } else {
+                                        eprintln!("Column not found: {}", where_clause.col_name);
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        for (rowid, row) in table.iter().enumerate() {
+                            let selected_columns: Vec<_> = row
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(i, value)| {
+                                    if column_indexes.contains(&i) {
+                                        Some(value.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            result.push((rowid, selected_columns));
                         }
                     }
 
@@ -135,10 +194,46 @@ impl<S: Storage> ToyDB<S> {
                 }
             }
             Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
-                //destructuring where_clause into Option<(std::string::String, DataValue)>
-                let where_col = where_clause.map(|where_col| (where_col.col_name, where_col.value));
-                let affected_rows = self.tables.update_table(&table_name, updates, where_col);
-                Ok(ToyDBResult::Update(affected_rows))
+                match where_clause {
+                    Some(WhereType::Regular(where_clause)) => {
+                        let where_col = (where_clause.col_name, where_clause.value);
+                        let affected_rows =
+                            self.tables
+                                .update_table(&table_name, updates.clone(), Some(where_col));
+
+                        // Update FTSText columns in the InvertedIndex
+                        let fts_columns = self.tables.get_fts_columns(&table_name);
+                        for (column_name, _) in &updates {
+                            if fts_columns.contains(&column_name) {
+                                let (_, rows) = self.tables.get_table_ref(&table_name).unwrap();
+                                for (rowid, row) in rows.iter().enumerate() {
+                                    let schema = self.tables.get_schema_ref(&table_name).unwrap();
+                                    let column_index = schema
+                                        .iter()
+                                        .position(|col| col.name == *column_name)
+                                        .unwrap();
+                                    if let DataValue::Text(ref text) = row[column_index] {
+                                        self.inverted_index.update_document(
+                                            &table_name,
+                                            &column_name,
+                                            rowid,
+                                            text,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        Ok(ToyDBResult::Update(affected_rows))
+                    }
+                    Some(WhereType::FTS(_)) => {
+                        unimplemented!()
+                    }
+                    None => {
+                        let affected_rows = self.tables.update_table(&table_name, updates, None);
+                        Ok(ToyDBResult::Update(affected_rows))
+                    }
+                }
             }
         }
     }
@@ -151,6 +246,53 @@ mod tests {
     use crate::storage::{disk::OnDiskStorage, memory::InMemoryStorage};
 
     use super::*;
+
+    #[test]
+    fn test_fts_text_search() {
+        let mut db: ToyDB<InMemoryStorage> = ToyDB::new(());
+
+        let statements = vec![
+            "CREATE TABLE books (title TEXT, author TEXT, description FTS_TEXT)",
+            "INSERT INTO books VALUES ('Book 1', 'Author 1', 'A book about the history of computer science.')",
+            "INSERT INTO books VALUES ('Book 2', 'Author 2', 'A book about modern programming languages.')",
+            "INSERT INTO books VALUES ('Book 3', 'Author 3', 'A book about the future of artificial intelligence.')",
+            "SELECT title, author FROM books WHERE description MATCH 'computer science'",
+            "SELECT title, author FROM books WHERE description MATCH 'artificial intelligence'",
+        ];
+
+        let mut results = Vec::new();
+        for statement in statements {
+            match Statement::parse(statement) {
+                Ok((_, stmt)) => {
+                    results.push(db.execute_statement(stmt));
+                }
+                Err(err) => eprintln!("Failed to parse statement: {}", err),
+            }
+        }
+
+        let expected_results = vec![
+            Ok(ToyDBResult::CreateTable),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Select(vec![(
+                0,
+                vec![
+                    DataValue::Text("Book 1".to_string()),
+                    DataValue::Text("Author 1".to_string()),
+                ],
+            )])),
+            Ok(ToyDBResult::Select(vec![(
+                2,
+                vec![
+                    DataValue::Text("Book 3".to_string()),
+                    DataValue::Text("Author 3".to_string()),
+                ],
+            )])),
+        ];
+
+        assert_eq!(results, expected_results);
+    }
 
     #[test]
     fn test_database_on_disk() {
@@ -183,16 +325,23 @@ mod tests {
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Update(2)),
             Ok(ToyDBResult::Select(vec![
-                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
-                vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
+                (
+                    0,
+                    vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
+                ),
+                (
+                    1,
+                    vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
+                ),
             ])),
             Ok(ToyDBResult::Select(vec![
-                vec![DataValue::Text("alice".to_string())],
-                vec![DataValue::Text("bob".to_string())],
+                (0, vec![DataValue::Text("alice".to_string())]),
+                (1, vec![DataValue::Text("bob".to_string())]),
             ])),
-            Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
-                "alice".to_string(),
-            )]])),
+            Ok(ToyDBResult::Select(vec![(
+                0,
+                vec![DataValue::Text("alice".to_string())],
+            )])),
         ];
         assert_eq!(results, expected_results);
 
@@ -218,7 +367,6 @@ mod tests {
         fs::remove_file(kv_path).unwrap();
     }
 
-    //test delete
     #[test]
     fn test_delete() {
         let mut db: ToyDB<InMemoryStorage> = ToyDB::new(());
@@ -245,16 +393,18 @@ mod tests {
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Delete(1)),
-            Ok(ToyDBResult::Select(vec![vec![
-                DataValue::Text("alice".to_string()),
-                DataValue::Integer(30),
-            ]])),
-            Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
-                "alice".to_string(),
-            )]])),
-            Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
-                "alice".to_string(),
-            )]])),
+            Ok(ToyDBResult::Select(vec![(
+                0,
+                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
+            )])),
+            Ok(ToyDBResult::Select(vec![(
+                0,
+                vec![DataValue::Text("alice".to_string())],
+            )])),
+            Ok(ToyDBResult::Select(vec![(
+                0,
+                vec![DataValue::Text("alice".to_string())],
+            )])),
         ];
         assert_eq!(results, expected_results);
     }
@@ -288,16 +438,23 @@ mod tests {
             Ok(ToyDBResult::Insert(1)),
             Ok(ToyDBResult::Update(2)), // Updated 1 row
             Ok(ToyDBResult::Select(vec![
-                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
-                vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
+                (
+                    0,
+                    vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
+                ),
+                (
+                    1,
+                    vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
+                ),
             ])),
             Ok(ToyDBResult::Select(vec![
-                vec![DataValue::Text("alice".to_string())],
-                vec![DataValue::Text("bob".to_string())],
+                (0, vec![DataValue::Text("alice".to_string())]),
+                (1, vec![DataValue::Text("bob".to_string())]),
             ])),
-            Ok(ToyDBResult::Select(vec![vec![DataValue::Text(
-                "alice".to_string(),
-            )]])),
+            Ok(ToyDBResult::Select(vec![(
+                0,
+                vec![DataValue::Text("alice".to_string())],
+            )])),
         ];
         assert_eq!(results, expected_results);
 

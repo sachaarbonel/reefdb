@@ -1,4 +1,4 @@
-use crate::{sql::column_def::ColumnDef, sql::data_value::DataValue};
+use crate::{sql::column_def::ColumnDef, sql::{data_value::DataValue, data_type::DataType}};
 
 pub mod disk;
 pub mod memory;
@@ -16,10 +16,19 @@ pub trait Storage {
     fn get_table(&mut self, table_name: &str)
         -> Option<&mut (Vec<ColumnDef>, Vec<Vec<DataValue>>)>;
 
-    //non mutable
-    fn get_table_ref(&self, table_name: &str)
-        -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)>;
-    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>);
+    fn get_fts_columns(&self, table_name: &str) -> Vec<String> {
+        if let Some((schema, _)) = self.get_table_ref(table_name) {
+            schema
+                .iter()
+                .filter(|column_def| column_def.data_type == DataType::FTSText)
+                .map(|column_def| column_def.name.clone())
+                .collect()
+        } else {
+            vec![] // Return an empty Vec if the table doesn't exist
+        }
+    }
+    fn get_table_ref(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)>;
+    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) -> usize;
 
     fn update_table(
         &mut self,

@@ -1,4 +1,3 @@
-use crate::sql::clauses::where_clause::WhereClause;
 use nom::{
     bytes::complete::tag,
     character::complete::{alphanumeric1, multispace1},
@@ -6,10 +5,12 @@ use nom::{
     IResult,
 };
 
+use crate::sql::clauses::wheres::where_type::WhereType;
+
 use super::Statement;
 #[derive(Debug, PartialEq)]
 pub enum DeleteStatement {
-    FromTable(String, Option<WhereClause>),
+    FromTable(String, Option<WhereType>),
 }
 
 impl DeleteStatement {
@@ -19,7 +20,7 @@ impl DeleteStatement {
         let (input, table_name) = alphanumeric1(input)?;
 
         let (input, _) = opt(multispace1)(input)?;
-        let (input, where_clause) = opt(WhereClause::parse)(input)?;
+        let (input, where_clause) = opt(WhereType::parse)(input)?;
         Ok((
             input,
             Statement::Delete(DeleteStatement::FromTable(
@@ -27,5 +28,34 @@ impl DeleteStatement {
                 where_clause,
             )),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sql::{
+        clauses::wheres::{where_clause::WhereClause, where_type::WhereType},
+        statements::Statement,
+    };
+
+    #[test]
+    fn parse_test() {
+        use super::DeleteStatement;
+        use crate::sql::data_value::DataValue;
+
+        assert_eq!(
+            DeleteStatement::parse("DELETE FROM users WHERE id = 1"),
+            Ok((
+                "",
+                Statement::Delete(DeleteStatement::FromTable(
+                    "users".to_string(),
+                    Some(WhereType::Regular(WhereClause {
+                        col_name: "id".to_string(),
+                        // operator: Operator::Equal,
+                        value: DataValue::Integer(1),
+                    }))
+                ))
+            ))
+        );
     }
 }

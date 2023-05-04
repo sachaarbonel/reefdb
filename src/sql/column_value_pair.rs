@@ -44,3 +44,22 @@ impl ColumnValuePair {
         ))
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parser_test() {
+        use super::ColumnValuePair;
+
+        let input = "id";
+        let expected = ColumnValuePair::new("id", "");
+        let actual = ColumnValuePair::parse(input).unwrap().1;
+        assert_eq!(expected, actual);
+
+        let input = "users.id";
+        let expected = ColumnValuePair::new("id", "users");
+        let actual = ColumnValuePair::parse(input).unwrap().1;
+        assert_eq!(expected, actual);
+    }
+}

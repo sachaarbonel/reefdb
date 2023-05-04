@@ -27,3 +27,20 @@ fn parse_quoted_text(input: &str) -> IResult<&str, DataValue> {
 
     Ok((input, DataValue::Text(value.to_string())))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_test() {
+     
+        use crate::sql::data_value::DataValue;
+        assert_eq!(
+            DataValue::parse("'Hello World'"),
+            Ok(("", DataValue::Text("Hello World".to_string())))
+        );
+        assert_eq!(
+            DataValue::parse("123"),
+            Ok(("", DataValue::Integer(123)))
+        );
+    }
+}

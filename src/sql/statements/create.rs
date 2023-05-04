@@ -32,3 +32,72 @@ impl CreateStatement {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::sql::{data_type::DataType, statements::Statement};
+
+    //create full text search table
+    #[test]
+    fn parse_data_type_fts_text(){
+        use super::CreateStatement;
+        use crate::sql::column_def::ColumnDef;
+
+        assert_eq!(
+            CreateStatement::parse("CREATE TABLE users (id INTEGER, name TEXT, fts FTS_TEXT)"),
+            Ok((
+                "",
+                Statement::Create(CreateStatement::Table(
+                    "users".to_string(),
+                    vec![
+                        ColumnDef {
+                            name: "id".to_string(),
+                            data_type: DataType::Integer,
+
+                            constraints: vec![],
+                        },
+                        ColumnDef {
+                            name: "name".to_string(),
+                            data_type: DataType::Text,
+                            constraints: vec![],
+                        },
+                        ColumnDef {
+                            name: "fts".to_string(),
+                            data_type: DataType::FTSText,
+                            constraints: vec![],
+                        },
+                    ]
+                ))
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_test() {
+        use super::CreateStatement;
+        use crate::sql::column_def::ColumnDef;
+
+        assert_eq!(
+            CreateStatement::parse("CREATE TABLE users (id INTEGER, name TEXT)"),
+            Ok((
+                "",
+                Statement::Create(CreateStatement::Table(
+                    "users".to_string(),
+                    vec![
+                        ColumnDef {
+                            name: "id".to_string(),
+                            data_type: DataType::Integer,
+
+                            constraints: vec![],
+                        },
+                        ColumnDef {
+                            name: "name".to_string(),
+                            data_type: DataType::Text,
+                            constraints: vec![],
+                        },
+                    ]
+                ))
+            ))
+        );
+    }
+}

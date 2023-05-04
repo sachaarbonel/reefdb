@@ -1,31 +1,8 @@
-use nom::{
-    branch::alt,
-    bytes::complete::{tag, tag_no_case},
-    character::complete::{alphanumeric1, multispace1},
-    combinator::map,
-    IResult,
-};
+use nom::{IResult, bytes::complete::{tag_no_case, tag}, character::complete::{multispace1, alphanumeric1}};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum Constraint {
-    NotNull,
-    PrimaryKey,
-    Unique,
-    ForeignKey(ForeignKeyConstraint),
-    // You can add more constraints here as needed.
-}
+use super::constraint::Constraint;
 
-impl Constraint {
-    pub fn parse(input: &str) -> IResult<&str, Constraint> {
-        alt((
-            map(tag("NOT NULL"), |_| Constraint::NotNull),
-            map(tag("PRIMARY KEY"), |_| Constraint::PrimaryKey),
-            map(tag("UNIQUE"), |_| Constraint::Unique),
-            ForeignKeyConstraint::parse,
-        ))(input)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ForeignKeyConstraint {
@@ -52,5 +29,26 @@ impl ForeignKeyConstraint {
                 column_name: referenced_column.to_string(),
             }),
         ))
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parser_test() {
+        use super::ForeignKeyConstraint;
+        use crate::sql::constraints::constraint::Constraint;
+
+        assert_eq!(
+            ForeignKeyConstraint::parse("FOREIGN KEY (id) REFERENCES users"),
+            Ok((
+                "",
+                Constraint::ForeignKey(ForeignKeyConstraint {
+                    table_name: "users".to_string(),
+                    column_name: "id".to_string(),
+                })
+            ))
+        );
     }
 }

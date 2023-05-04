@@ -1,8 +1,8 @@
 use nom::{
     branch::alt,
-    bytes::complete::{tag, tag_no_case, take_while1},
+    bytes::complete::{tag, tag_no_case},
     character::complete::{multispace0, multispace1},
-    combinator::{opt, value},
+    combinator::value,
     IResult,
 };
 use serde::{Deserialize, Serialize};

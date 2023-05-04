@@ -44,9 +44,18 @@ mod tests {
 
     #[test]
     fn parse_2_test() {
-        let input = "INSERT INTO orders VALUES (1, 1, 'iPhone')";
+        use crate::sql::data_value::DataValue;
+        use crate::sql::statements::Statement;
 
-        let result = InsertStatement::parse(input);
-        println!("{:?}", result);
+        assert_eq!(
+            InsertStatement::parse("INSERT INTO users VALUES (1, 'Alice')"),
+            Ok((
+                "",
+                Statement::Insert(InsertStatement::IntoTable(
+                    "users".to_string(),
+                    vec![DataValue::Integer(1), DataValue::Text("Alice".to_string())]
+                ))
+            ))
+        );
     }
 }

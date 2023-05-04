@@ -1,10 +1,10 @@
 use crate::sql::column_def::ColumnDef;
 use crate::sql::data_value::DataValue;
-use bincode::{deserialize, deserialize_from, serialize, serialize_into};
+use bincode::{deserialize, serialize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 
 use super::Storage;
@@ -70,10 +70,23 @@ impl Storage for OnDiskStorage {
         self.tables.contains_key(table_name)
     }
 
-    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) {
-        let (_, rows) = self.tables.get_mut(table_name).unwrap();
-        rows.push(row);
-        self.save();
+    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) -> usize {
+        if let Some((_, rows)) = self.get_table(table_name) {
+            // Add the new row to the table
+            rows.push(row);
+
+            // Get the rowid (index of the newly added row)
+            let rowid = rows.len() - 1;
+
+            // Save the updated table to disk
+            self.save();
+
+            // Return the rowid
+            rowid
+        } else {
+            // Return an error value if the table doesn't exist
+            usize::MAX
+        }
     }
 
     fn update_table(
@@ -130,8 +143,7 @@ impl Storage for OnDiskStorage {
         idx
     }
 
-    fn get_table_ref(&self, table_name: &str)
-        -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
+    fn get_table_ref(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
         self.tables.get(table_name)
     }
 }

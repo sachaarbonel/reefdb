@@ -9,7 +9,7 @@ use nom::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{data_type::DataType, statements::constraints::Constraint};
+use super::{data_type::DataType, constraints::constraint::Constraint};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColumnDef {
@@ -17,6 +17,7 @@ pub struct ColumnDef {
     pub data_type: DataType,
     pub constraints: Vec<Constraint>,
 }
+
 
 pub fn table_name(input: &str) -> IResult<&str, &str> {
     recognize(tuple((
@@ -34,6 +35,14 @@ pub fn column_name(input: &str) -> IResult<&str, &str> {
 }
 
 impl ColumnDef {
+
+    pub fn new(name: &str, data_type: DataType, constraints: Vec<Constraint>) -> Self {
+        Self {
+            name: name.to_string(),
+            data_type,
+            constraints,
+        }
+    }
     pub fn parse(input: &str) -> IResult<&str, ColumnDef> {
         let (input, name) = column_name(input)?; // Use custom column_name() instead of alphanumeric1
         let (input, _) = multispace1(input)?;
@@ -58,7 +67,9 @@ impl ColumnDef {
 //test
 #[cfg(test)]
 mod tests {
-    use crate::sql::statements::constraints::ForeignKeyConstraint;
+    
+
+    use crate::sql::constraints::foreignkey::ForeignKeyConstraint;
 
     use super::*;
 

@@ -5,7 +5,7 @@ use self::{
 
 use nom::{branch::alt, character::complete::multispace0, sequence::preceded, IResult};
 
-pub mod constraints;
+
 pub mod create;
 pub mod delete;
 pub mod insert;

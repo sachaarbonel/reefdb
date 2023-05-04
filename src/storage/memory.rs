@@ -35,9 +35,17 @@ impl Storage for InMemoryStorage {
         self.tables.contains_key(table_name)
     }
 
-    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) {
-        let (_, rows) = self.get_table(table_name).unwrap();
-        rows.push(row);
+    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) -> usize {
+        if let Some((_, rows)) = self.get_table(table_name) {
+            // Add the new row to the table
+            rows.push(row);
+
+            // Return the rowid (index of the newly added row)
+            rows.len() - 1
+        } else {
+            // Return an error value if the table doesn't exist
+            usize::MAX
+        }
     }
 
     fn update_table(
@@ -68,8 +76,6 @@ impl Storage for InMemoryStorage {
         }
         idx
     }
-    
-    
 
     fn delete_table(
         &mut self,
@@ -94,8 +100,49 @@ impl Storage for InMemoryStorage {
         idx
     }
 
-    fn get_table_ref(&self, table_name: &str)
-        -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
+    fn get_table_ref(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
         self.tables.get(table_name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sql::{constraints::constraint::Constraint, data_type::DataType};
+
+    #[test]
+    fn test() {
+        use super::*;
+        use crate::sql::column_def::ColumnDef;
+        use crate::sql::data_value::DataValue;
+        let mut storage = InMemoryStorage::new(());
+        let columns = vec![
+            ColumnDef::new("id", DataType::Integer, vec![Constraint::PrimaryKey]),
+            ColumnDef::new("name",DataType::Text, vec![]),
+            ColumnDef::new("age", DataType::Integer, vec![]),
+        ];
+        let rows = vec![
+            vec![
+                DataValue::Integer(1),
+                DataValue::Text("John".to_string()),
+                DataValue::Integer(20),
+            ],
+            vec![
+                DataValue::Integer(2),
+                DataValue::Text("Jane".to_string()),
+                DataValue::Integer(25),
+            ],
+        ];
+        storage.insert_table("users".to_string(), columns, rows);
+        let (schema, rows) = storage.get_table("users").unwrap();
+        assert_eq!(schema.len(), 3);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].len(), 3);
+        assert_eq!(rows[1].len(), 3);
+        assert_eq!(rows[0][0], DataValue::Integer(1));
+        assert_eq!(rows[0][1], DataValue::Text("John".to_string()));
+        assert_eq!(rows[0][2], DataValue::Integer(20));
+        assert_eq!(rows[1][0], DataValue::Integer(2));
+        assert_eq!(rows[1][1], DataValue::Text("Jane".to_string()));
+        assert_eq!(rows[1][2], DataValue::Integer(25));
     }
 }

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum DataType {
     Text,
     Integer,
+    FTSText
 }
 
 impl DataType {
@@ -12,6 +13,20 @@ impl DataType {
         alt((
             map(tag("TEXT"), |_| DataType::Text),
             map(tag("INTEGER"), |_| DataType::Integer),
+            map(tag("FTS_TEXT"), |_| DataType::FTSText),
         ))(input)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parse_test() {
+        use crate::sql::data_type::DataType;
+
+        assert_eq!(DataType::parse("TEXT"), Ok(("", DataType::Text)));
+        assert_eq!(DataType::parse("INTEGER"), Ok(("", DataType::Integer)));
+        assert_eq!(DataType::parse("FTS_TEXT"), Ok(("", DataType::FTSText)));
     }
 }

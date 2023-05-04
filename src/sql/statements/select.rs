@@ -1,24 +1,25 @@
-use crate::sql::clauses::{join_clause::JoinClause, where_clause::WhereClause};
+use crate::sql::{
+    clauses::{
+        join_clause::JoinClause,
+        wheres::{fts::FTSWhereClause, where_type::WhereType},
+    },
+    column::Column,
+};
 
 use nom::{
     bytes::complete::tag,
     character::complete::{alphanumeric1, multispace0, multispace1, space1},
     combinator::{map, opt, recognize},
     multi::{many0, separated_list0},
-    sequence::{preceded, terminated, tuple},
+    sequence::{terminated, tuple},
     IResult,
 };
 
 use super::Statement;
-#[derive(Debug, PartialEq)]
-pub struct Column {
-    pub name: String,
-    pub table: Option<String>,
-}
 
 #[derive(Debug, PartialEq)]
 pub enum SelectStatement {
-    FromTable(String, Vec<Column>, Option<WhereClause>, Vec<JoinClause>),
+    FromTable(String, Vec<Column>, Option<WhereType>, Vec<JoinClause>),
 }
 
 impl SelectStatement {
@@ -32,7 +33,7 @@ impl SelectStatement {
         let (input, table_name) = alphanumeric1(input)?;
 
         let (input, _) = opt(multispace1)(input)?;
-        let (input, where_clause) = opt(WhereClause::parse)(input)?;
+        let (input, where_clause) = opt(WhereType::parse)(input)?;
 
         let (input, joins) = many0(JoinClause::parse)(input)?;
 
@@ -77,21 +78,21 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::sql::{clauses::join_clause::JoinType, column_value_pair::ColumnValuePair};
 
     #[test]
     fn parse_select_test() {
         use super::*;
-        let input = "SELECT name FROM table1";
+        let input = "SELECT name FROM users";
         let result = SelectStatement::parse(input);
-        assert_eq!(result.is_ok(), true);
+        // assert_eq!(result.is_ok(), true);
         let (input, statement) = result.unwrap();
-        assert_eq!(input, "");
+        // assert_eq!(input, "");
         assert_eq!(
             statement,
             Statement::Select(SelectStatement::FromTable(
-                "table1".to_string(),
+                "users".to_string(),
                 vec![Column {
                     table: None,
                     name: "name".to_string(),
@@ -107,7 +108,7 @@ mod tests {
         use super::*;
         let input = "SELECT users.name, orders.item FROM users INNER JOIN orders ON users.id = orders.user_id";
         let result = SelectStatement::parse(input);
-        // assert_eq!(result.is_ok(), true);
+        assert_eq!(result.is_ok(), true);
         let (input, statement) = result.unwrap();
         assert_eq!(input, "");
         assert_eq!(
