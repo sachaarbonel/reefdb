@@ -9,13 +9,13 @@ use nom::{
 
 use super::Statement;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum CreateStatement {
     Table(String, Vec<ColumnDef>),
 }
 
 impl CreateStatement {
-   pub fn parse(input: &str) -> IResult<&str, Statement> {
+    pub fn parse(input: &str) -> IResult<&str, Statement> {
         let (input, _) = tag("CREATE TABLE")(input)?;
         let (input, _) = multispace1(input)?;
         let (input, table_name) = alphanumeric1(input)?;

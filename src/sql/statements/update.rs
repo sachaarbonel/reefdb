@@ -7,11 +7,11 @@ use nom::{
     IResult,
 };
 
-use crate::sql::{data_value::DataValue, where_clause::WhereClause};
+use crate::sql::{clauses::where_clause::WhereClause, data_value::DataValue};
 
 use super::Statement;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum UpdateStatement {
     UpdateTable(String, Vec<(String, DataValue)>, Option<WhereClause>),
 }

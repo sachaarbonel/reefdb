@@ -129,4 +129,9 @@ impl Storage for OnDiskStorage {
         self.save();
         idx
     }
+
+    fn get_table_ref(&self, table_name: &str)
+        -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
+        self.tables.get(table_name)
+    }
 }

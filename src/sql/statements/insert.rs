@@ -10,7 +10,7 @@ use nom::{
 
 use super::Statement;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum InsertStatement {
     IntoTable(String, Vec<DataValue>),
 }
@@ -20,6 +20,8 @@ impl InsertStatement {
         let (input, _) = tag("INSERT INTO")(input)?;
         let (input, _) = multispace1(input)?;
         let (input, table_name) = alphanumeric1(input)?;
+        let (input, _) = multispace1(input)?;
+        let (input, _) = tag("VALUES")(input)?;
         let (input, _) = multispace1(input)?;
         let (input, values) = delimited(
             tag("("),
@@ -33,5 +35,18 @@ impl InsertStatement {
             input,
             Statement::Insert(InsertStatement::IntoTable(table_name.to_string(), values)),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::sql::statements::insert::InsertStatement;
+
+    #[test]
+    fn parse_2_test() {
+        let input = "INSERT INTO orders VALUES (1, 1, 'iPhone')";
+
+        let result = InsertStatement::parse(input);
+        println!("{:?}", result);
     }
 }

@@ -4,12 +4,12 @@ use nom::{
     IResult,
 };
 
-use super::data_value::DataValue;
+use crate::sql::data_value::DataValue;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct WhereClause {
-   pub col_name: String,
-   pub value: DataValue,
+    pub col_name: String,
+    pub value: DataValue,
 }
 
 impl WhereClause {

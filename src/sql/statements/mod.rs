@@ -5,14 +5,14 @@ use self::{
 
 use nom::{branch::alt, character::complete::multispace0, sequence::preceded, IResult};
 
+pub mod constraints;
 pub mod create;
 pub mod delete;
 pub mod insert;
 pub mod select;
 pub mod update;
-pub mod constraints;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Statement {
     Create(CreateStatement),
     Insert(InsertStatement),

@@ -18,7 +18,15 @@ pub struct ColumnDef {
     pub constraints: Vec<Constraint>,
 }
 
-fn column_name(input: &str) -> IResult<&str, &str> {
+pub fn table_name(input: &str) -> IResult<&str, &str> {
+    recognize(tuple((
+        alpha1,
+        many0(alt((alphanumeric1, tag("_")))),
+        opt(preceded(tag("."), alpha1)),
+    )))(input)
+}
+
+pub fn column_name(input: &str) -> IResult<&str, &str> {
     recognize(tuple((
         alt((alpha1, tag("_"))),
         many0(alt((alphanumeric1, tag("_")))),

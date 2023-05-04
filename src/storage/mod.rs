@@ -15,6 +15,10 @@ pub trait Storage {
 
     fn get_table(&mut self, table_name: &str)
         -> Option<&mut (Vec<ColumnDef>, Vec<Vec<DataValue>>)>;
+
+    //non mutable
+    fn get_table_ref(&self, table_name: &str)
+        -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)>;
     fn push_value(&mut self, table_name: &str, row: Vec<DataValue>);
 
     fn update_table(
@@ -31,4 +35,13 @@ pub trait Storage {
     ) -> usize;
 
     fn table_exists(&self, table_name: &str) -> bool;
+
+    fn get_schema(&mut self, table_name: &str) -> Option<&mut Vec<ColumnDef>> {
+        self.get_table(table_name).map(|(schema, _)| schema)
+    }
+
+    // non mutable
+    fn get_schema_ref(&self, table_name: &str) -> Option<&Vec<ColumnDef>> {
+        self.get_table_ref(table_name).map(|(schema, _)| schema)
+    }
 }

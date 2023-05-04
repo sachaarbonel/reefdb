@@ -68,6 +68,8 @@ impl Storage for InMemoryStorage {
         }
         idx
     }
+    
+    
 
     fn delete_table(
         &mut self,
@@ -90,5 +92,10 @@ impl Storage for InMemoryStorage {
             idx += 1;
         }
         idx
+    }
+
+    fn get_table_ref(&self, table_name: &str)
+        -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
+        self.tables.get(table_name)
     }
 }

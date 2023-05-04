@@ -3,6 +3,7 @@ use nom::IResult;
 mod sql;
 
 use sql::{
+    clauses::join_clause::{JoinClause, JoinType},
     data_value::DataValue,
     statements::{
         create::CreateStatement, delete::DeleteStatement, insert::InsertStatement,
@@ -82,7 +83,7 @@ impl<S: Storage> ToyDB<S> {
                 //     Ok(ToyDBResult::Insert(0))
                 // }
             }
-            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause)) => {
+            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, _)) => {
                 // println!("where_clause: {:#?}", where_clause);
                 if let Some((schema, table)) = self.tables.get_table(&table_name) {
                     let column_indexes: Vec<_> = columns
@@ -90,7 +91,7 @@ impl<S: Storage> ToyDB<S> {
                         .map(|column_name| {
                             schema
                                 .iter()
-                                .position(|column_def| &column_def.name == column_name)
+                                .position(|column_def| &column_def.name == &column_name.name)
                                 .unwrap()
                         })
                         .collect();
@@ -159,8 +160,8 @@ mod tests {
 
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users ('alice', 30)",
-            "INSERT INTO users ('bob', 28)",
+            "INSERT INTO users VALUES ('alice', 30)",
+            "INSERT INTO users VALUES ('bob', 28)",
             "UPDATE users SET age = 31 WHERE name = 'bob'",
             "SELECT name, age FROM users",
             "SELECT name FROM users",
@@ -223,8 +224,8 @@ mod tests {
         let mut db: ToyDB<InMemoryStorage> = ToyDB::new(());
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users ('alice', 30)",
-            "INSERT INTO users ('bob', 28)",
+            "INSERT INTO users VALUES ('alice', 30)",
+            "INSERT INTO users VALUES ('bob', 28)",
             "DELETE FROM users WHERE name = 'bob'",
             "SELECT name, age FROM users",
             "SELECT name FROM users",
@@ -264,8 +265,8 @@ mod tests {
 
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users ('alice', 30)",
-            "INSERT INTO users ('bob', 28)",
+            "INSERT INTO users VALUES ('alice', 30)",
+            "INSERT INTO users VALUES ('bob', 28)",
             "UPDATE users SET age = 31 WHERE name = 'bob'",
             "SELECT name, age FROM users",
             "SELECT name FROM users",

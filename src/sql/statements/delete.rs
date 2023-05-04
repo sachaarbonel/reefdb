@@ -1,4 +1,4 @@
-use crate::sql::where_clause::WhereClause;
+use crate::sql::clauses::where_clause::WhereClause;
 use nom::{
     bytes::complete::tag,
     character::complete::{alphanumeric1, multispace1},
@@ -7,7 +7,7 @@ use nom::{
 };
 
 use super::Statement;
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum DeleteStatement {
     FromTable(String, Option<WhereClause>),
 }
