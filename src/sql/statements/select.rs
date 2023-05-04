@@ -77,8 +77,8 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::sql::clauses::join_clause::ColumnValuePair;
-    use crate::sql::clauses::join_clause::JoinType;
+    
+    use crate::sql::{clauses::join_clause::JoinType, column_value_pair::ColumnValuePair};
 
     #[test]
     fn parse_select_test() {

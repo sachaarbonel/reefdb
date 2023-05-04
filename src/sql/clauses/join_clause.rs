@@ -3,27 +3,11 @@ use nom::{
     bytes::complete::{tag, tag_no_case, take_while1},
     character::complete::{multispace0, multispace1},
     combinator::{opt, value},
-    sequence::tuple,
     IResult,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::sql::column_def::table_name;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ColumnValuePair {
-    pub column_name: String,
-    pub table_name: String,
-}
-
-impl ColumnValuePair {
-    pub fn new(column_name: &str, table_name: &str) -> Self {
-        Self {
-            column_name: column_name.to_string(),
-            table_name: table_name.to_string(),
-        }
-    }
-}
+use crate::sql::{column_def::table_name, column_value_pair::ColumnValuePair};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JoinClause {
@@ -51,33 +35,6 @@ fn join_type(input: &str) -> IResult<&str, JoinType> {
     ))(input)
 }
 
-// fn column_name(input: &str) -> IResult<&str, String> {
-//     recognize(tuple((opt(tuple((identifier, tag(".")))), identifier)))(input)
-//         .map(|(next_input, res)| (next_input, res.to_string()))
-// }
-
-// A parser for identifiers (e.g., table names, column names)
-fn identifier(input: &str) -> IResult<&str, &str> {
-    take_while1(|c: char| c.is_alphanumeric() || c == '_')(input)
-}
-fn column_name(input: &str) -> IResult<&str, ColumnValuePair> {
-    let (input, (table_part, column)) =
-        tuple((opt(tuple((identifier, tag(".")))), identifier))(input)?;
-
-    let table_name = match table_part {
-        Some((table, _)) => table.to_string(),
-        None => String::new(),
-    };
-
-    Ok((
-        input,
-        ColumnValuePair {
-            column_name: column.to_string(),
-            table_name,
-        },
-    ))
-}
-
 impl JoinClause {
     pub fn new(
         join_type: JoinType,
@@ -100,11 +57,11 @@ impl JoinClause {
         let (input, _) = multispace1(input)?;
         let (input, _) = tag_no_case("ON")(input)?;
         let (input, _) = multispace1(input)?;
-        let (input, col1) = column_name(input)?;
+        let (input, col1) = ColumnValuePair::parse(input)?;
         let (input, _) = multispace0(input)?;
         let (input, _) = tag("=")(input)?;
         let (input, _) = multispace0(input)?;
-        let (input, col2) = column_name(input)?;
+        let (input, col2) = ColumnValuePair::parse(input)?;
 
         Ok((
             input,
