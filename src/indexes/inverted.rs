@@ -1,15 +1,19 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use super::tokenizers::tokenizer::Tokenizer;
+
 #[derive(Debug)]
-pub struct InvertedIndex {
+pub struct InvertedIndex<T: Tokenizer> {
     index: HashMap<String, HashMap<String, HashMap<String, HashSet<usize>>>>,
+    tokenizer: T,
 }
 
-impl InvertedIndex {
+impl<T: Tokenizer> InvertedIndex<T> {
     pub fn new() -> Self {
         InvertedIndex {
             index: HashMap::new(),
+            tokenizer: T::new(),
         }
     }
 
@@ -35,7 +39,7 @@ impl InvertedIndex {
             .entry(column.to_string())
             .or_insert(HashMap::new());
 
-        for word in text.split_whitespace() {
+        for word in self.tokenizer.tokenize(text) {
             let word_entry = column_entry
                 .entry(word.to_string())
                 .or_insert(HashSet::new());
@@ -57,7 +61,7 @@ impl InvertedIndex {
         let mut results = HashSet::new();
         if let Some(table_entry) = self.index.get(table) {
             if let Some(column_entry) = table_entry.get(column) {
-                for word in query.split_whitespace() {
+                for word in self.tokenizer.tokenize(query) {
                     if let Some(word_entry) = column_entry.get(word) {
                         results.extend(word_entry);
                     }
@@ -70,11 +74,15 @@ impl InvertedIndex {
 
 #[cfg(test)]
 mod tests {
+    
+
+    use crate::indexes::tokenizers::default::DefaultTokenizer;
+
     use super::*;
 
     #[test]
     fn test_inverted_index() {
-        let mut index = InvertedIndex::new();
+        let mut index: InvertedIndex<DefaultTokenizer> = InvertedIndex::new();
 
         // Add documents
         index.add_document("table1", "column1", 0, "hello world");
