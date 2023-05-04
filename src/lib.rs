@@ -1,5 +1,9 @@
 mod storage;
-use indexes::{inverted::InvertedIndex, tokenizers::tokenizer::Tokenizer};
+
+use indexes::fts::{
+    default::{DefaultSearchIdx, OnDiskSearchIdx},
+    search::Search,
+};
 use nom::IResult;
 mod indexes;
 mod sql;
@@ -14,11 +18,15 @@ use sql::{
     },
 };
 
-use storage::Storage;
+use storage::{disk::OnDiskStorage, memory::InMemoryStorage, Storage};
 
-pub struct ToyDB<S: Storage, T: Tokenizer> {
+pub type InMemoryToyDB = ToyDB<InMemoryStorage, DefaultSearchIdx>;
+
+pub type OnDiskToyDB = ToyDB<OnDiskStorage, OnDiskSearchIdx>;
+
+pub struct ToyDB<S: Storage, FTS: Search> {
     tables: S,
-    inverted_index: InvertedIndex<T>,
+    inverted_index: FTS,
 }
 
 #[derive(PartialEq, Debug)]
@@ -37,11 +45,11 @@ pub enum ToyDBError {
     ParseError(String),
 }
 
-impl<S: Storage, T: Tokenizer> ToyDB<S, T> {
-    pub fn new(args: S::NewArgs) -> Self {
+impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
+    pub fn new(args: S::NewArgs, args2: FTS::NewArgs) -> Self {
         ToyDB {
             tables: S::new(args),
-            inverted_index: InvertedIndex::new(),
+            inverted_index: FTS::new(args2),
         }
     }
 
@@ -243,13 +251,11 @@ impl<S: Storage, T: Tokenizer> ToyDB<S, T> {
 mod tests {
     use std::fs;
 
-    use crate::{storage::{disk::OnDiskStorage, memory::InMemoryStorage}, indexes::tokenizers::default::DefaultTokenizer};
-
     use super::*;
 
     #[test]
     fn test_fts_text_search() {
-        let mut db: ToyDB<InMemoryStorage, DefaultTokenizer> = ToyDB::new(());
+        let mut db = InMemoryToyDB::new((), ());
 
         let statements = vec![
             "CREATE TABLE books (title TEXT, author TEXT, description FTS_TEXT)",
@@ -297,8 +303,9 @@ mod tests {
     #[test]
     fn test_database_on_disk() {
         let kv_path = "kv.db";
+        let index = "index.bin";
 
-        let mut db: ToyDB<OnDiskStorage, DefaultTokenizer> = ToyDB::new(kv_path.to_string());
+        let mut db = OnDiskToyDB::new(kv_path.to_string(), index.to_string());
 
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -369,7 +376,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let mut db: ToyDB<InMemoryStorage, DefaultTokenizer> = ToyDB::new(());
+        let mut db = InMemoryToyDB::new((), ());
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users VALUES ('alice', 30)",
@@ -411,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_database() {
-        let mut db: ToyDB<InMemoryStorage, DefaultTokenizer> = ToyDB::new(());
+        let mut db = InMemoryToyDB::new((), ());
 
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",

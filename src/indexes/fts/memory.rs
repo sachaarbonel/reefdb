@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use serde::Deserialize;
+use serde::Serialize;
+
+use super::search::Search;
 use super::tokenizers::tokenizer::Tokenizer;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct InvertedIndex<T: Tokenizer> {
     index: HashMap<String, HashMap<String, HashMap<String, HashSet<usize>>>>,
     tokenizer: T,
@@ -72,13 +76,38 @@ impl<T: Tokenizer> InvertedIndex<T> {
     }
 }
 
+impl<T: Tokenizer + Serialize + for<'de> Deserialize<'de>> Search for InvertedIndex<T> {
+    type NewArgs = ();
+    fn new(_: Self::NewArgs) -> Self {
+        InvertedIndex::new()
+    }
+
+    fn add_column(&mut self, table: &str, column: &str) {
+        InvertedIndex::add_column(self, table, column)
+    }
+
+    fn search(&self, table: &str, column: &str, query: &str) -> HashSet<usize> {
+        InvertedIndex::search(self, table, column, query)
+    }
+
+    fn add_document(&mut self, table: &str, column: &str, row_id: usize, text: &str) {
+        InvertedIndex::add_document(self, table, column, row_id, text)
+    }
+
+    fn remove_document(&mut self, table: &str, column: &str, row_id: usize) {
+        InvertedIndex::remove_document(self, table, column, row_id)
+    }
+
+    fn update_document(&mut self, table: &str, column: &str, row_id: usize, text: &str) {
+        InvertedIndex::update_document(self, table, column, row_id, text)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    
+    use std::collections::HashSet;
 
-    use crate::indexes::tokenizers::default::DefaultTokenizer;
-
-    use super::*;
+    use crate::indexes::fts::{tokenizers::default::DefaultTokenizer, memory::InvertedIndex};
 
     #[test]
     fn test_inverted_index() {

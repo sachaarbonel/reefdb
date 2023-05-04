@@ -1,2 +1,1 @@
-pub mod inverted;
-pub mod tokenizers;
+pub mod fts;

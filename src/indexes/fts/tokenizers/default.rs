@@ -1,5 +1,8 @@
+use serde::{Deserialize, Serialize};
+
 use super::tokenizer::Tokenizer;
 
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DefaultTokenizer;
 
 impl Tokenizer for DefaultTokenizer {
@@ -11,7 +14,6 @@ impl Tokenizer for DefaultTokenizer {
         DefaultTokenizer
     }
 }
-
 
 #[cfg(test)]
 mod tests {
