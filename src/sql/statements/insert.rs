@@ -40,8 +40,26 @@ impl InsertStatement {
 
 #[cfg(test)]
 mod tests {
-    use crate::sql::statements::insert::InsertStatement;
+    use crate::sql::{data_value::DataValue, statements::insert::InsertStatement};
 
+    #[test]
+    fn parse_3_test() {
+        let input = "INSERT INTO users VALUES (1, 'Alice')";
+       
+        assert_eq!(
+            InsertStatement::parse(input),
+            Ok((
+                "",
+                super::Statement::Insert(InsertStatement::IntoTable(
+                    "users".to_string(),
+                    vec![
+                        DataValue::Integer(1),
+                        DataValue::Text("Alice".to_string())
+                    ]
+                ))
+            ))
+        );
+    }
     #[test]
     fn parse_2_test() {
         use crate::sql::data_value::DataValue;
