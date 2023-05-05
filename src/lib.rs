@@ -20,14 +20,26 @@ use sql::{
     },
 };
 
-mod result;
 mod error;
+mod result;
 
 use storage::{disk::OnDiskStorage, memory::InMemoryStorage, Storage};
 
 pub type InMemoryToyDB = ToyDB<InMemoryStorage, DefaultSearchIdx>;
 
+impl InMemoryToyDB {
+    pub fn new() -> Self {
+        ToyDB::init((), ())
+    }
+}
+
 pub type OnDiskToyDB = ToyDB<OnDiskStorage, OnDiskSearchIdx>;
+
+impl OnDiskToyDB {
+    pub fn new(db_path: String, index_path: String) -> Self {
+        ToyDB::init(db_path, index_path)
+    }
+}
 
 //clone
 #[derive(Clone)]
@@ -36,12 +48,21 @@ pub struct ToyDB<S: Storage, FTS: Search> {
     inverted_index: FTS,
 }
 
-
 impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
-    pub fn new(args: S::NewArgs, args2: FTS::NewArgs) -> Self {
+    fn init(args: S::NewArgs, args2: FTS::NewArgs) -> Self {
         ToyDB {
             tables: S::new(args),
             inverted_index: FTS::new(args2),
+        }
+    }
+
+    pub fn query(&mut self, query: &str) -> Result<ToyDBResult, ToyDBError> {
+        match Statement::parse(query) {
+            Ok((_, stmt)) => self.execute_statement(stmt),
+            Err(err) => {
+                eprintln!("Failed to parse statement: {}", err);
+                Err(ToyDBError::Other(err.to_string()))
+            }
         }
     }
 
@@ -126,8 +147,6 @@ impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
 
                     // If there are no join clauses, perform a regular select operation
                     if joins.is_empty() {
-                  
-
                         // if there is a where clause, filter the result
                         if let Some(where_type) = where_type {
                             let column_indexes: Vec<_> = columns
@@ -208,7 +227,7 @@ impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
                                             .unwrap()
                                     })
                                     .collect();
-    
+
                                 let selected_columns: Vec<_> = row
                                     .iter()
                                     .enumerate()
@@ -365,9 +384,9 @@ mod tests {
 
     #[test]
     fn test_inner_join() {
-        let mut db = InMemoryToyDB::new((), ());
+        let mut db = InMemoryToyDB::new();
 
-        let statements = vec![
+        let queries = vec![
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
         "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT, user_id INTEGER FOREIGN KEY (id) REFERENCES users)",
         "INSERT INTO users VALUES (1, 'Alice')",
@@ -378,13 +397,8 @@ mod tests {
     ];
 
         let mut results = Vec::new();
-        for statement in statements {
-            match Statement::parse(statement) {
-                Ok((_, stmt)) => {
-                    results.push(db.execute_statement(stmt));
-                }
-                Err(err) => eprintln!("Failed to parse statement: {}", err),
-            }
+        for query in queries {
+            results.push(db.query(query));
         }
 
         let expected_results = vec![
@@ -416,9 +430,9 @@ mod tests {
 
     #[test]
     fn test_fts_text_search() {
-        let mut db = InMemoryToyDB::new((), ());
+        let mut db = InMemoryToyDB::new();
 
-        let statements = vec![
+        let queries = vec![
             "CREATE TABLE books (title TEXT, author TEXT, description FTS_TEXT)",
             "INSERT INTO books VALUES ('Book 1', 'Author 1', 'A book about the history of computer science.')",
             "INSERT INTO books VALUES ('Book 2', 'Author 2', 'A book about modern programming languages.')",
@@ -428,13 +442,8 @@ mod tests {
         ];
 
         let mut results = Vec::new();
-        for statement in statements {
-            match Statement::parse(statement) {
-                Ok((_, stmt)) => {
-                    results.push(db.execute_statement(stmt));
-                }
-                Err(err) => eprintln!("Failed to parse statement: {}", err),
-            }
+        for query in queries {
+            results.push(db.query(query));
         }
 
         let expected_results = vec![
@@ -468,7 +477,7 @@ mod tests {
 
         let mut db = OnDiskToyDB::new(kv_path.to_string(), index.to_string());
 
-        let statements = vec![
+        let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users VALUES ('alice', 30)",
             "INSERT INTO users VALUES ('bob', 28)",
@@ -478,13 +487,8 @@ mod tests {
             "SELECT name FROM users WHERE age = 30",
         ];
         let mut results = Vec::new();
-        for statement in statements {
-            match Statement::parse(statement) {
-                Ok((_, stmt)) => {
-                    results.push(db.execute_statement(stmt));
-                }
-                Err(err) => eprintln!("Failed to parse statement: {}", err),
-            }
+        for query in queries {
+            results.push(db.query(query));
         }
 
         let expected_results = vec![
@@ -537,8 +541,8 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let mut db = InMemoryToyDB::new((), ());
-        let statements = vec![
+        let mut db = InMemoryToyDB::new();
+        let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users VALUES ('alice', 30)",
             "INSERT INTO users VALUES ('bob', 28)",
@@ -548,14 +552,10 @@ mod tests {
             "SELECT name FROM users WHERE age = 30",
         ];
         let mut results = Vec::new();
-        for statement in statements {
-            match Statement::parse(statement) {
-                Ok((_, stmt)) => {
-                    results.push(db.execute_statement(stmt));
-                }
-                Err(err) => eprintln!("Failed to parse statement: {}", err),
-            }
+        for query in queries {
+            results.push(db.query(query));
         }
+
         let expected_results = vec![
             Ok(ToyDBResult::CreateTable),
             Ok(ToyDBResult::Insert(1)),
@@ -575,14 +575,13 @@ mod tests {
             )])),
         ];
         assert_eq!(results, expected_results);
-        
     }
 
     #[test]
     fn test_database() {
-        let mut db = InMemoryToyDB::new((), ());
+        let mut db = InMemoryToyDB::new();
 
-        let statements = vec![
+        let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users VALUES ('alice', 30)",
             "INSERT INTO users VALUES ('bob', 28)",
@@ -592,13 +591,8 @@ mod tests {
             "SELECT name FROM users WHERE age = 30",
         ];
         let mut results = Vec::new();
-        for statement in statements {
-            match Statement::parse(statement) {
-                Ok((_, stmt)) => {
-                    results.push(db.execute_statement(stmt));
-                }
-                Err(err) => eprintln!("Failed to parse statement: {}", err),
-            }
+        for query in queries {
+            results.push(db.query(query));
         }
 
         let expected_results = vec![

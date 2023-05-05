@@ -39,7 +39,7 @@ impl<S: Storage + Clone, FTS: Search + Clone> ToyDB<S, FTS> {
 
 #[test]
 fn test_transactions() {
-    let mut db = InMemoryToyDB::new((), ());
+    let mut db = InMemoryToyDB::new();
 
     // Create a table and insert a row outside of a transaction
     let (_, create_stmt) = Statement::parse("CREATE TABLE users (name TEXT, age INTEGER)").unwrap();
@@ -50,19 +50,13 @@ fn test_transactions() {
     // Start a transaction and insert two rows
     let mut transaction = db.begin_transaction();
     let (_, insert_stmt2) = Statement::parse("INSERT INTO users VALUES ('jane', 25)").unwrap();
-    transaction
-        .execute_statement(insert_stmt2)
-        .unwrap();
+    transaction.execute_statement(insert_stmt2).unwrap();
     let (_, insert_stmt3) = Statement::parse("INSERT INTO users VALUES ('john', 27)").unwrap();
-    transaction
-        .execute_statement(insert_stmt3)
-        .unwrap();
+    transaction.execute_statement(insert_stmt3).unwrap();
 
     let (_, select_stmt) = Statement::parse("SELECT name, age FROM users").unwrap();
     // Execute a SELECT statement before committing the transaction
-    let select_result_before_commit = transaction
-        .execute_statement(select_stmt)
-        .unwrap();
+    let select_result_before_commit = transaction.execute_statement(select_stmt).unwrap();
 
     // Check if the SELECT result contains changes from the transaction
     assert_eq!(
@@ -86,11 +80,9 @@ fn test_transactions() {
     // Commit the transaction
     transaction.commit(&mut db);
 
-let (_, select_stmt2) = Statement::parse("SELECT name, age FROM users").unwrap();
+    let (_, select_stmt2) = Statement::parse("SELECT name, age FROM users").unwrap();
     // Execute a SELECT statement after committing the transaction
-    let select_result_after_commit = db
-        .execute_statement(select_stmt2)
-        .unwrap();
+    let select_result_after_commit = db.execute_statement(select_stmt2).unwrap();
 
     // Check if the SELECT result contains changes from the committed transaction
     assert_eq!(select_result_after_commit, select_result_before_commit);
@@ -98,13 +90,9 @@ let (_, select_stmt2) = Statement::parse("SELECT name, age FROM users").unwrap()
     // Start a new transaction and insert a new row
     let mut transaction2 = db.begin_transaction();
     let (_, insert_stmt4) = Statement::parse("INSERT INTO users VALUES ('emma', 18)").unwrap();
-    transaction2
-        .execute_statement(insert_stmt4)
-        .unwrap();
+    transaction2.execute_statement(insert_stmt4).unwrap();
     let (_, select_stmt3) = Statement::parse("SELECT name, age FROM users").unwrap();
-    let select_result_before_rollback = transaction2
-        .execute_statement(select_stmt3)
-        .unwrap();
+    let select_result_before_rollback = transaction2.execute_statement(select_stmt3).unwrap();
 
     assert_eq!(
         select_result_before_rollback,
@@ -132,8 +120,6 @@ let (_, select_stmt2) = Statement::parse("SELECT name, age FROM users").unwrap()
     transaction2.rollback(&mut db);
     let (_, select_stmt4) = Statement::parse("SELECT name, age FROM users").unwrap();
     // Check if the rollback has discarded the changes made in the transaction
-    let select_result_after_rollback = db
-        .execute_statement(select_stmt4)
-        .unwrap();
+    let select_result_after_rollback = db.execute_statement(select_stmt4).unwrap();
     assert_eq!(select_result_after_rollback, select_result_after_commit);
 }
