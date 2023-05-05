@@ -549,8 +549,8 @@ mod tests {
         let statements = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users VALUES ('alice', 30)",
-            // "INSERT INTO users VALUES ('bob', 28)",
-            // "DELETE FROM users WHERE name = 'bob'",
+            "INSERT INTO users VALUES ('bob', 28)",
+            "DELETE FROM users WHERE name = 'bob'",
             "SELECT name, age FROM users",
             "SELECT name FROM users",
             "SELECT name FROM users WHERE age = 30",
@@ -567,8 +567,8 @@ mod tests {
         let expected_results = vec![
             Ok(ToyDBResult::CreateTable),
             Ok(ToyDBResult::Insert(1)),
-            // Ok(ToyDBResult::Insert(1)),
-            // Ok(ToyDBResult::Delete(1)),
+            Ok(ToyDBResult::Insert(1)),
+            Ok(ToyDBResult::Delete(1)),
             Ok(ToyDBResult::Select(vec![(
                 0,
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
@@ -583,6 +583,7 @@ mod tests {
             )])),
         ];
         assert_eq!(results, expected_results);
+        
     }
 
     #[test]
