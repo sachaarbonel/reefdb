@@ -1,5 +1,6 @@
 mod storage;
 
+use error::ToyDBError;
 use indexes::fts::{
     default::{DefaultSearchIdx, OnDiskSearchIdx},
     search::Search,
@@ -7,7 +8,8 @@ use indexes::fts::{
 use nom::IResult;
 mod indexes;
 mod sql;
-
+mod transaction;
+use result::ToyDBResult;
 use sql::{
     clauses::{join_clause::JoinType, wheres::where_type::WhereType},
     data_type::DataType,
@@ -18,32 +20,22 @@ use sql::{
     },
 };
 
+mod result;
+mod error;
+
 use storage::{disk::OnDiskStorage, memory::InMemoryStorage, Storage};
 
 pub type InMemoryToyDB = ToyDB<InMemoryStorage, DefaultSearchIdx>;
 
 pub type OnDiskToyDB = ToyDB<OnDiskStorage, OnDiskSearchIdx>;
 
+//clone
+#[derive(Clone)]
 pub struct ToyDB<S: Storage, FTS: Search> {
     tables: S,
     inverted_index: FTS,
 }
 
-#[derive(PartialEq, Debug)]
-pub enum ToyDBResult {
-    Select(Vec<(usize, Vec<DataValue>)>),
-    Insert(usize),
-    CreateTable,
-    Update(usize),
-    Delete(usize),
-}
-
-#[derive(Debug, PartialEq)]
-pub enum ToyDBError {
-    TableNotFound(String),
-    ColumnNotFound(String),
-    ParseError(String),
-}
 
 impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
     pub fn new(args: S::NewArgs, args2: FTS::NewArgs) -> Self {

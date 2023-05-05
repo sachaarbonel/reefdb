@@ -3,6 +3,8 @@ use std::collections::HashMap;
 
 use super::Storage;
 use crate::sql::data_value::DataValue;
+
+#[derive(Clone)]
 pub struct InMemoryStorage {
     tables: HashMap<String, (Vec<ColumnDef>, Vec<Vec<DataValue>>)>,
 }
@@ -117,7 +119,7 @@ mod tests {
         let mut storage = InMemoryStorage::new(());
         let columns = vec![
             ColumnDef::new("id", DataType::Integer, vec![Constraint::PrimaryKey]),
-            ColumnDef::new("name",DataType::Text, vec![]),
+            ColumnDef::new("name", DataType::Text, vec![]),
             ColumnDef::new("age", DataType::Integer, vec![]),
         ];
         let rows = vec![

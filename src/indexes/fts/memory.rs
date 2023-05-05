@@ -7,7 +7,7 @@ use serde::Serialize;
 use super::search::Search;
 use super::tokenizers::tokenizer::Tokenizer;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InvertedIndex<T: Tokenizer> {
     index: HashMap<String, HashMap<String, HashMap<String, HashSet<usize>>>>,
     tokenizer: T,
@@ -107,7 +107,7 @@ impl<T: Tokenizer + Serialize + for<'de> Deserialize<'de>> Search for InvertedIn
 mod tests {
     use std::collections::HashSet;
 
-    use crate::indexes::fts::{tokenizers::default::DefaultTokenizer, memory::InvertedIndex};
+    use crate::indexes::fts::{memory::InvertedIndex, tokenizers::default::DefaultTokenizer};
 
     #[test]
     fn test_inverted_index() {

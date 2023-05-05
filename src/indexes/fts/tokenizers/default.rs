@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::tokenizer::Tokenizer;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DefaultTokenizer;
 
 impl Tokenizer for DefaultTokenizer {

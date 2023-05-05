@@ -3,6 +3,7 @@ use crate::{sql::column_def::ColumnDef, sql::{data_value::DataValue, data_type::
 pub mod disk;
 pub mod memory;
 
+
 pub trait Storage {
     type NewArgs;
     fn new(args: Self::NewArgs) -> Self;
