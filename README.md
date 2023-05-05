@@ -160,6 +160,24 @@ fn main() {
 }
 ```
 
+## Future Improvements (TODOs)
+
+- [ ] Implement support for more SQL statements such as ALTER TABLE, DROP TABLE, and additional JOIN types (LEFT, RIGHT, OUTER).
+- [ ] Add support for indexing and query optimization to improve performance.
+- [ ] Implement transaction support and atomicity for database operations (there is a transaction struct but it's not in autocommit mode like in sqlite)
+- [ ] Add support for user-defined functions, aggregate functions (SUM, COUNT, AVG, MIN, MAX), Grouping and sorting (GROUP BY and ORDER BY), and stored procedures.
+- [ ] Improve error handling and reporting.
+- [ ] Enhance the full-text search capability with more advanced text processing techniques such as stemming, tokenization, and handling of synonyms.
+- [ ] Implement authentication and authorization mechanisms for secure access to the database.
+- [ ] Add support for replication and distributed database management (using raft-rs?)
+- [ ] Implement a command-line interface or GUI for interacting with the database.
+- [ ] Improve documentation and provide examples for using the database in various use cases.
+- [ ] Write benchmarks and performance tests to measure and optimize the database performance.
+- [ ] Enforce constraints such as unique, primary key, foreign key, and check constraints to maintain data integrity.
+- [ ] Implement multi-threading and concurrency control for improved performance and safe parallel access to the database
+- [ ] Add support for handling various data types (e.g., date and time, binary data) and user-defined data types.
+- [ ] Optimize memory management and caching mechanisms for efficient resource utilization.
+
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for more information.
