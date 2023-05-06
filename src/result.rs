@@ -1,8 +1,7 @@
 use crate::sql::data_value::DataValue;
 
-
 #[derive(PartialEq, Debug)]
-pub enum ToyDBResult {
+pub enum ReefDBResult {
     Select(Vec<(usize, Vec<DataValue>)>),
     Insert(usize),
     CreateTable,

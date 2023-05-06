@@ -1,45 +1,45 @@
 use crate::{
-    error::ToyDBError,
+    error::ReefDBError,
     indexes::fts::search::Search,
-    result::ToyDBResult,
+    result::ReefDBResult,
     sql::{data_value::DataValue, statements::Statement},
     storage::Storage,
-    InMemoryToyDB, ToyDB,
+    InMemoryReefDB, ReefDB,
 };
 
 #[derive(Clone)]
 pub struct Transaction<S: Storage + Clone, FTS: Search + Clone> {
-    toy_db: ToyDB<S, FTS>,
+    reef_db: ReefDB<S, FTS>,
 }
 
 impl<S: Storage + Clone, FTS: Search + Clone> Transaction<S, FTS> {
-    pub fn execute_statement(&mut self, stmt: Statement) -> Result<ToyDBResult, ToyDBError> {
-        self.toy_db.execute_statement(stmt)
+    pub fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
+        self.reef_db.execute_statement(stmt)
     }
 
-    pub fn commit(&mut self, toy_db: &mut ToyDB<S, FTS>) {
-        toy_db.tables = self.toy_db.tables.clone();
-        toy_db.inverted_index = self.toy_db.inverted_index.clone();
+    pub fn commit(&mut self, reef_db: &mut ReefDB<S, FTS>) {
+        reef_db.tables = self.reef_db.tables.clone();
+        reef_db.inverted_index = self.reef_db.inverted_index.clone();
     }
 
-    pub fn rollback(&mut self, toy_db: &mut ToyDB<S, FTS>) {
-        self.toy_db.tables = toy_db.tables.clone();
-        self.toy_db.inverted_index = toy_db.inverted_index.clone();
+    pub fn rollback(&mut self, reef_db: &mut ReefDB<S, FTS>) {
+        self.reef_db.tables = reef_db.tables.clone();
+        self.reef_db.inverted_index = reef_db.inverted_index.clone();
     }
 }
 
-// Add this method to the ToyDB struct
-impl<S: Storage + Clone, FTS: Search + Clone> ToyDB<S, FTS> {
+// Add this method to the ReefDB struct
+impl<S: Storage + Clone, FTS: Search + Clone> ReefDB<S, FTS> {
     pub fn begin_transaction(&self) -> Transaction<S, FTS> {
         Transaction {
-            toy_db: self.clone(),
+            reef_db: self.clone(),
         }
     }
 }
 
 #[test]
 fn test_transactions() {
-    let mut db = InMemoryToyDB::new();
+    let mut db = InMemoryReefDB::new();
 
     // Create a table and insert a row outside of a transaction
     let (_, create_stmt) = Statement::parse("CREATE TABLE users (name TEXT, age INTEGER)").unwrap();
@@ -61,7 +61,7 @@ fn test_transactions() {
     // Check if the SELECT result contains changes from the transaction
     assert_eq!(
         select_result_before_commit,
-        ToyDBResult::Select(vec![
+        ReefDBResult::Select(vec![
             (
                 0,
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)]
@@ -96,7 +96,7 @@ fn test_transactions() {
 
     assert_eq!(
         select_result_before_rollback,
-        ToyDBResult::Select(vec![
+        ReefDBResult::Select(vec![
             (
                 0,
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)]

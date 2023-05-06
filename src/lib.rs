@@ -1,6 +1,6 @@
 mod storage;
 
-use error::ToyDBError;
+use error::ReefDBError;
 use indexes::fts::{
     default::{DefaultSearchIdx, OnDiskSearchIdx},
     search::Search,
@@ -9,7 +9,7 @@ use nom::IResult;
 mod indexes;
 mod sql;
 mod transaction;
-use result::ToyDBResult;
+use result::ReefDBResult;
 use sql::{
     clauses::{join_clause::JoinType, wheres::where_type::WhereType},
     data_type::DataType,
@@ -25,48 +25,48 @@ mod result;
 
 use storage::{disk::OnDiskStorage, memory::InMemoryStorage, Storage};
 
-pub type InMemoryToyDB = ToyDB<InMemoryStorage, DefaultSearchIdx>;
+pub type InMemoryReefDB = ReefDB<InMemoryStorage, DefaultSearchIdx>;
 
-impl InMemoryToyDB {
+impl InMemoryReefDB {
     pub fn new() -> Self {
-        ToyDB::init((), ())
+        ReefDB::init((), ())
     }
 }
 
-pub type OnDiskToyDB = ToyDB<OnDiskStorage, OnDiskSearchIdx>;
+pub type OnDiskReefDB = ReefDB<OnDiskStorage, OnDiskSearchIdx>;
 
-impl OnDiskToyDB {
+impl OnDiskReefDB {
     pub fn new(db_path: String, index_path: String) -> Self {
-        ToyDB::init(db_path, index_path)
+        ReefDB::init(db_path, index_path)
     }
 }
 
 //clone
 #[derive(Clone)]
-pub struct ToyDB<S: Storage, FTS: Search> {
+pub struct ReefDB<S: Storage, FTS: Search> {
     tables: S,
     inverted_index: FTS,
 }
 
-impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
+impl<S: Storage, FTS: Search> ReefDB<S, FTS> {
     fn init(args: S::NewArgs, args2: FTS::NewArgs) -> Self {
-        ToyDB {
+        ReefDB {
             tables: S::new(args),
             inverted_index: FTS::new(args2),
         }
     }
 
-    pub fn query(&mut self, query: &str) -> Result<ToyDBResult, ToyDBError> {
+    pub fn query(&mut self, query: &str) -> Result<ReefDBResult, ReefDBError> {
         match Statement::parse(query) {
             Ok((_, stmt)) => self.execute_statement(stmt),
             Err(err) => {
                 eprintln!("Failed to parse statement: {}", err);
-                Err(ToyDBError::Other(err.to_string()))
+                Err(ReefDBError::Other(err.to_string()))
             }
         }
     }
 
-    fn execute_statement(&mut self, stmt: Statement) -> Result<ToyDBResult, ToyDBError> {
+    fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
         match stmt {
             Statement::Delete(DeleteStatement::FromTable(table_name, where_type)) => {
                 if let Some((schema, table)) = self.tables.get_table(&table_name) {
@@ -99,9 +99,9 @@ impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
                             deleted_rows += 1;
                         }
                     }
-                    Ok(ToyDBResult::Delete(deleted_rows))
+                    Ok(ReefDBResult::Delete(deleted_rows))
                 } else {
-                    Err(ToyDBError::TableNotFound(table_name))
+                    Err(ReefDBError::TableNotFound(table_name))
                 }
             }
             Statement::Create(CreateStatement::Table(table_name, cols)) => {
@@ -116,7 +116,7 @@ impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
                     }
                 }
 
-                Ok(ToyDBResult::CreateTable)
+                Ok(ReefDBResult::CreateTable)
             }
             Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
                 let row_id = self.tables.push_value(&table_name, values.clone());
@@ -134,7 +134,7 @@ impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
                         }
                     }
                 }
-                Ok(ToyDBResult::Insert(1))
+                Ok(ReefDBResult::Insert(1))
             }
             Statement::Select(SelectStatement::FromTable(
                 table_name,
@@ -325,9 +325,9 @@ impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
                         }
                     }
 
-                    Ok(ToyDBResult::Select(result))
+                    Ok(ReefDBResult::Select(result))
                 } else {
-                    Err(ToyDBError::TableNotFound(table_name))
+                    Err(ReefDBError::TableNotFound(table_name))
                 }
             }
             Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
@@ -361,14 +361,14 @@ impl<S: Storage, FTS: Search> ToyDB<S, FTS> {
                             }
                         }
 
-                        Ok(ToyDBResult::Update(affected_rows))
+                        Ok(ReefDBResult::Update(affected_rows))
                     }
                     Some(WhereType::FTS(_)) => {
                         unimplemented!()
                     }
                     None => {
                         let affected_rows = self.tables.update_table(&table_name, updates, None);
-                        Ok(ToyDBResult::Update(affected_rows))
+                        Ok(ReefDBResult::Update(affected_rows))
                     }
                 }
             }
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_inner_join() {
-        let mut db = InMemoryToyDB::new();
+        let mut db = InMemoryReefDB::new();
 
         let queries = vec![
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
@@ -402,13 +402,13 @@ mod tests {
         }
 
         let expected_results = vec![
-            Ok(ToyDBResult::CreateTable),
-            Ok(ToyDBResult::CreateTable),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Select(vec![
+            Ok(ReefDBResult::CreateTable),
+            Ok(ReefDBResult::CreateTable),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Select(vec![
                 (
                     0,
                     vec![
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_fts_text_search() {
-        let mut db = InMemoryToyDB::new();
+        let mut db = InMemoryReefDB::new();
 
         let queries = vec![
             "CREATE TABLE books (title TEXT, author TEXT, description FTS_TEXT)",
@@ -447,18 +447,18 @@ mod tests {
         }
 
         let expected_results = vec![
-            Ok(ToyDBResult::CreateTable),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Select(vec![(
+            Ok(ReefDBResult::CreateTable),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Select(vec![(
                 0,
                 vec![
                     DataValue::Text("Book 1".to_string()),
                     DataValue::Text("Author 1".to_string()),
                 ],
             )])),
-            Ok(ToyDBResult::Select(vec![(
+            Ok(ReefDBResult::Select(vec![(
                 2,
                 vec![
                     DataValue::Text("Book 3".to_string()),
@@ -475,7 +475,7 @@ mod tests {
         let kv_path = "kv.db";
         let index = "index.bin";
 
-        let mut db = OnDiskToyDB::new(kv_path.to_string(), index.to_string());
+        let mut db = OnDiskReefDB::new(kv_path.to_string(), index.to_string());
 
         let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -492,11 +492,11 @@ mod tests {
         }
 
         let expected_results = vec![
-            Ok(ToyDBResult::CreateTable),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Update(2)),
-            Ok(ToyDBResult::Select(vec![
+            Ok(ReefDBResult::CreateTable),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Update(2)),
+            Ok(ReefDBResult::Select(vec![
                 (
                     0,
                     vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
@@ -506,11 +506,11 @@ mod tests {
                     vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
                 ),
             ])),
-            Ok(ToyDBResult::Select(vec![
+            Ok(ReefDBResult::Select(vec![
                 (0, vec![DataValue::Text("alice".to_string())]),
                 (1, vec![DataValue::Text("bob".to_string())]),
             ])),
-            Ok(ToyDBResult::Select(vec![(
+            Ok(ReefDBResult::Select(vec![(
                 0,
                 vec![DataValue::Text("alice".to_string())],
             )])),
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let mut db = InMemoryToyDB::new();
+        let mut db = InMemoryReefDB::new();
         let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users VALUES ('alice', 30)",
@@ -557,19 +557,19 @@ mod tests {
         }
 
         let expected_results = vec![
-            Ok(ToyDBResult::CreateTable),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Delete(1)),
-            Ok(ToyDBResult::Select(vec![(
+            Ok(ReefDBResult::CreateTable),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Delete(1)),
+            Ok(ReefDBResult::Select(vec![(
                 0,
                 vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
             )])),
-            Ok(ToyDBResult::Select(vec![(
+            Ok(ReefDBResult::Select(vec![(
                 0,
                 vec![DataValue::Text("alice".to_string())],
             )])),
-            Ok(ToyDBResult::Select(vec![(
+            Ok(ReefDBResult::Select(vec![(
                 0,
                 vec![DataValue::Text("alice".to_string())],
             )])),
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_database() {
-        let mut db = InMemoryToyDB::new();
+        let mut db = InMemoryReefDB::new();
 
         let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -596,11 +596,11 @@ mod tests {
         }
 
         let expected_results = vec![
-            Ok(ToyDBResult::CreateTable),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Insert(1)),
-            Ok(ToyDBResult::Update(2)), // Updated 1 row
-            Ok(ToyDBResult::Select(vec![
+            Ok(ReefDBResult::CreateTable),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::Update(2)), // Updated 1 row
+            Ok(ReefDBResult::Select(vec![
                 (
                     0,
                     vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
@@ -610,11 +610,11 @@ mod tests {
                     vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
                 ),
             ])),
-            Ok(ToyDBResult::Select(vec![
+            Ok(ReefDBResult::Select(vec![
                 (0, vec![DataValue::Text("alice".to_string())]),
                 (1, vec![DataValue::Text("bob".to_string())]),
             ])),
-            Ok(ToyDBResult::Select(vec![(
+            Ok(ReefDBResult::Select(vec![(
                 0,
                 vec![DataValue::Text("alice".to_string())],
             )])),

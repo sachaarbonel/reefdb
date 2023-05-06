@@ -1,6 +1,5 @@
-
 #[derive(Debug, PartialEq)]
-pub enum ToyDBError {
+pub enum ReefDBError {
     TableNotFound(String),
     ColumnNotFound(String),
     ParseError(String),
