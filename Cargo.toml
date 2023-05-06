@@ -6,7 +6,7 @@ description = "ReefDB is a minimalistic, in-memory and on-disk database manageme
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/sachaarbonel/reefdb"
-keywords = ["rust", "database", "sql", "full-text-search", "in-memory", "on-disk"]
+keywords = ["database", "sql", "full-text-search", "in-memory", "on-disk"]
 categories = ["database", "storage"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
