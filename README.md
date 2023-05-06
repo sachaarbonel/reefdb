@@ -1,6 +1,8 @@
-# ToyDB
+# ReefDB
 
-ToyDB is a minimalistic, in-memory and on-disk database management system written in Rust, implementing basic SQL query capabilities and full-text search.
+![ReefDB logo](https://user-images.githubusercontent.com/18029834/236632891-643c5a0a-8e26-4e88-9bc2-db69125b295f.png)
+
+ReefDB is a minimalistic, in-memory and on-disk database management system written in Rust, implementing basic SQL query capabilities and full-text search.
 
 ## Features
 
@@ -18,15 +20,15 @@ ToyDB is a minimalistic, in-memory and on-disk database management system writte
 
 ## Usage
 
-To use ToyDB, you can choose between an in-memory storage (`InMemoryToyDB`) or on-disk storage (`OnDiskToyDB`). 
+To use ReefDB, you can choose between an in-memory storage (`InMemoryReefDB`) or on-disk storage (`OnDiskReefDB`). 
 
-### In-Memory ToyDB Example
+### In-Memory ReefDB Example
 
 ```rust
-use toydb::InMemoryToyDB;
+use reefdb::InMemoryReefDB;
 
 fn main() {
-    let mut db = InMemoryToyDB::new();
+    let mut db = InMemoryReefDB::new();
 
     let queries = vec![
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
@@ -42,15 +44,15 @@ fn main() {
 }
 ```
 
-### On-Disk ToyDB Example
+### On-Disk ReefDB Example
 
 ```rust
-use toydb::OnDiskToyDB;
+use reefdb::OnDiskReefDB;
 
 fn main() {
     let kv_path = "kv.db";
     let index = "index.bin";
-    let mut db = OnDiskToyDB::new(kv_path.to_string(), index.to_string());
+    let mut db = OnDiskReefDB::new(kv_path.to_string(), index.to_string());
 
     let queries = vec![
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
@@ -69,10 +71,10 @@ fn main() {
 ### Full-Text Search Example
 
 ```rust
-use toydb::InMemoryToyDB;
+use reefdb::InMemoryReefDB;
 
 fn main() {
-    let mut db = InMemoryToyDB::new();
+    let mut db = InMemoryReefDB::new();
 
     let queries = vec![
         "CREATE TABLE books (title TEXT, author TEXT, description FTS_TEXT)",
@@ -92,10 +94,10 @@ fn main() {
 ### DELETE Example
 
 ```rust
-use toydb::InMemoryToyDB;
+use reefdb::InMemoryReefDB;
 
 fn main() {
-    let mut db = InMemoryToyDB::new();
+    let mut db = InMemoryReefDB::new();
 
     let queries = vec![
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
@@ -115,10 +117,10 @@ fn main() {
 ### UPDATE Example
 
 ```rust
-use toydb::InMemoryToyDB;
+use reefdb::InMemoryReefDB;
 
 fn main() {
-    let mut db = InMemoryToyDB::new();
+    let mut db = InMemoryReefDB::new();
 
     let queries = vec![
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
@@ -138,10 +140,10 @@ fn main() {
 ### INNER JOIN Example
 
 ```rust
-use toydb::InMemoryToyDB;
+use reefdb::InMemoryReefDB;
 
 fn main() {
-    let mut db = InMemoryToyDB::new();
+    let mut db = InMemoryReefDB::new();
 
     let queries = vec![
         "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)",
