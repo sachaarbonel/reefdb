@@ -5,6 +5,7 @@ use crate::{
     sql::statements::Statement,
     storage::Storage,
     ReefDB,
+    acid::AcidManager,
 };
 
 use std::time::SystemTime;
@@ -36,6 +37,7 @@ where
     reef_db: ReefDB<S, FTS>,
     start_timestamp: SystemTime,
     isolation_level: IsolationLevel,
+    acid_manager: AcidManager,
 }
 
 impl<S: Storage + Clone, FTS: Search + Clone> Transaction<S, FTS>
@@ -48,9 +50,10 @@ where
         Transaction {
             id: TRANSACTION_ID.fetch_add(1, Ordering::SeqCst),
             state: TransactionState::Active,
-            reef_db,
+            reef_db: reef_db.clone(),
             start_timestamp: SystemTime::now(),
             isolation_level,
+            acid_manager: AcidManager::new(true),
         }
     }
 
@@ -59,9 +62,14 @@ where
             return Err(ReefDBError::Other("Transaction is not active".to_string()));
         }
         
+        // Take a snapshot before executing the statement for ACID compliance
+        self.acid_manager.begin_atomic(&self.reef_db.tables);
+        
         let result = self.reef_db.execute_statement(stmt);
         if result.is_err() {
             self.state = TransactionState::Failed;
+            // Rollback to the snapshot
+            self.reef_db.tables = self.acid_manager.rollback_atomic();
         }
         result
     }
@@ -70,6 +78,9 @@ where
         if self.state != TransactionState::Active {
             return Err(ReefDBError::Other("Transaction is not active".to_string()));
         }
+
+        // Ensure ACID properties during commit
+        self.acid_manager.commit_atomic()?;
 
         reef_db.tables = self.reef_db.tables.clone();
         reef_db.inverted_index = self.reef_db.inverted_index.clone();
@@ -83,6 +94,8 @@ where
             return Err(ReefDBError::Other("Transaction cannot be rolled back".to_string()));
         }
 
+        // Rollback to the initial snapshot
+        self.reef_db.tables = self.acid_manager.rollback_atomic();
         self.reef_db.tables = reef_db.tables.clone();
         self.reef_db.inverted_index = reef_db.inverted_index.clone();
         

@@ -29,6 +29,9 @@ mod storage;
 pub mod transaction;
 pub mod transaction_manager;
 pub mod wal;
+pub mod acid;
+pub mod mvcc;
+pub mod deadlock;
 
 use storage::{disk::OnDiskStorage, memory::InMemoryStorage, Storage};
 use std::path::PathBuf;
@@ -57,8 +60,11 @@ impl Storage for TableStorage {
         Self::new()
     }
 
-    fn insert_table(&mut self, table_name: String, columns: Vec<ColumnDef>, _rows: Vec<Vec<DataValue>>) {
-        let table = Table::new(columns);
+    fn insert_table(&mut self, table_name: String, columns: Vec<ColumnDef>, rows: Vec<Vec<DataValue>>) {
+        let mut table = Table::new(columns);
+        for row in rows {
+            table.insert_row(row);
+        }
         self.tables.insert(table_name, table);
     }
 

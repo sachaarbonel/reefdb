@@ -185,6 +185,76 @@ fn main() {
 - ✅ Transaction isolation levels (ReadUncommitted, ReadCommitted, RepeatableRead, Serializable)
 - ✅ Write-Ahead Logging (WAL)
 - ✅ Transaction manager with locking mechanism
+- ✅ Full ACID compliance
+- ✅ Deadlock detection
+- ✅ MVCC implementation
+
+### Transaction Example
+
+```rust
+use reefdb::{OnDiskReefDB, transaction::IsolationLevel};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut db = OnDiskReefDB::create_on_disk("db.reef".to_string(), "index.bin".to_string())?;
+
+    // Begin a transaction with Serializable isolation level
+    let tx_id = db.begin_transaction(IsolationLevel::Serializable)?;
+
+    // Execute statements within the transaction
+    let queries = vec![
+        "CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER)",
+        "INSERT INTO accounts VALUES (1, 1000)",
+        "INSERT INTO accounts VALUES (2, 500)",
+        "UPDATE accounts SET balance = balance - 100 WHERE id = 1",
+        "UPDATE accounts SET balance = balance + 100 WHERE id = 2",
+    ];
+
+    for query in queries {
+        match db.query(query) {
+            Ok(_) => continue,
+            Err(e) => {
+                // Rollback on error
+                db.rollback_transaction(tx_id)?;
+                return Err(Box::new(e));
+            }
+        }
+    }
+
+    // Commit the transaction
+    db.commit_transaction(tx_id)?;
+    Ok(())
+}
+```
+
+### MVCC Example
+
+```rust
+use reefdb::{OnDiskReefDB, transaction::IsolationLevel};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut db = OnDiskReefDB::create_on_disk("db.reef".to_string(), "index.bin".to_string())?;
+
+    // Start two concurrent transactions
+    let tx1_id = db.begin_transaction(IsolationLevel::Serializable)?;
+    let tx2_id = db.begin_transaction(IsolationLevel::Serializable)?;
+
+    // Each transaction sees its own version of the data
+    db.query("CREATE TABLE test (id INTEGER, value TEXT)")?;
+    db.query("INSERT INTO test VALUES (1, 'initial')")?;
+
+    // Transaction 1 updates the value
+    db.query("UPDATE test SET value = 'tx1_update' WHERE id = 1")?;
+
+    // Transaction 2 still sees the original value
+    let result = db.query("SELECT value FROM test WHERE id = 1")?;
+    assert_eq!(result.to_string(), "initial");
+
+    // Commit both transactions
+    db.commit_transaction(tx1_id)?;
+    db.commit_transaction(tx2_id)?;
+    Ok(())
+}
+```
 
 ### Indexing
 - ✅ B-Tree index implementation
@@ -209,11 +279,11 @@ fn main() {
 - [ ] LIMIT and OFFSET support
 
 #### Transaction Enhancements
-- [ ] Full ACID compliance
+- [x] Full ACID compliance
 - [ ] Autocommit mode
 - [ ] SAVEPOINT support
-- [ ] Deadlock detection
-- [ ] MVCC implementation
+- [x] Deadlock detection
+- [x] MVCC implementation
 
 #### Index Improvements
 - [ ] Multi-column indexes
@@ -290,3 +360,56 @@ fn main() {
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for more information.
+
+### ACID Compliance
+
+ReefDB now provides full ACID (Atomicity, Consistency, Isolation, Durability) compliance:
+
+- **Atomicity**: Transactions are all-or-nothing. If any part fails, the entire transaction is rolled back.
+- **Consistency**: The database moves from one valid state to another, maintaining all constraints.
+- **Isolation**: Concurrent transactions don't interfere with each other, using MVCC and proper locking.
+- **Durability**: Committed transactions are persisted to disk using Write-Ahead Logging.
+
+### Deadlock Detection
+
+ReefDB implements deadlock detection using a wait-for graph algorithm:
+
+- Automatically detects circular wait conditions between transactions
+- Selects appropriate victim transactions to break deadlocks
+- Provides graceful recovery by rolling back affected transactions
+- Integrates with the transaction manager for seamless handling
+
+### Deadlock Example
+
+```rust
+use reefdb::{OnDiskReefDB, transaction::IsolationLevel};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut db = OnDiskReefDB::create_on_disk("db.reef".to_string(), "index.bin".to_string())?;
+
+    // Start two concurrent transactions
+    let tx1_id = db.begin_transaction(IsolationLevel::Serializable)?;
+    let tx2_id = db.begin_transaction(IsolationLevel::Serializable)?;
+
+    // Transaction 1 updates table1
+    db.query("UPDATE table1 SET value = 'new' WHERE id = 1")?;
+
+    // Transaction 2 updates table2
+    db.query("UPDATE table2 SET value = 'new' WHERE id = 1")?;
+
+    // Potential deadlock: T1 tries to access T2's resource and vice versa
+    match db.query("UPDATE table2 SET value = 'new2' WHERE id = 2") {
+        Ok(_) => (),
+        Err(e) => {
+            // Handle deadlock error
+            if e.to_string().contains("deadlock") {
+                db.rollback_transaction(tx1_id)?;
+            }
+        }
+    }
+
+    // Clean up
+    db.commit_transaction(tx2_id)?;
+    Ok(())
+}
+```

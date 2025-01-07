@@ -7,6 +7,8 @@ use crate::{
     ReefDB,
     transaction::{Transaction, TransactionState, IsolationLevel},
     wal::{WriteAheadLog, WALEntry, WALOperation},
+    mvcc::MVCCManager,
+    deadlock::DeadlockDetector,
 };
 
 #[derive(Debug)]
@@ -65,6 +67,8 @@ where
     lock_manager: Arc<Mutex<LockManager>>,
     wal: Arc<Mutex<WriteAheadLog>>,
     reef_db: Arc<Mutex<ReefDB<S, FTS>>>,
+    mvcc_manager: Arc<Mutex<MVCCManager>>,
+    deadlock_detector: Arc<Mutex<DeadlockDetector>>,
 }
 
 impl<S: Storage + Clone, FTS: Search + Clone> TransactionManager<S, FTS>
@@ -77,6 +81,8 @@ where
             lock_manager: Arc::new(Mutex::new(LockManager::new())),
             wal: Arc::new(Mutex::new(wal)),
             reef_db: Arc::new(Mutex::new(reef_db)),
+            mvcc_manager: Arc::new(Mutex::new(MVCCManager::new())),
+            deadlock_detector: Arc::new(Mutex::new(DeadlockDetector::new())),
         }
     }
 
@@ -86,6 +92,11 @@ where
         
         let transaction = Transaction::create((*reef_db).clone(), isolation_level);
         let id = transaction.get_id();
+        
+        // Initialize MVCC timestamp for the transaction
+        self.mvcc_manager.lock()
+            .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?
+            .begin_transaction(id);
         
         self.active_transactions.insert(id, transaction);
         Ok(id)
@@ -118,10 +129,19 @@ where
         
         transaction.commit(&mut reef_db)?;
 
-        // Release locks
+        // Commit MVCC changes
+        self.mvcc_manager.lock()
+            .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?
+            .commit(id);
+
+        // Release locks and remove from deadlock detector
         self.lock_manager.lock()
             .map_err(|_| ReefDBError::Other("Failed to acquire lock manager".to_string()))?
             .release_transaction_locks(id);
+        
+        self.deadlock_detector.lock()
+            .map_err(|_| ReefDBError::Other("Failed to acquire deadlock detector".to_string()))?
+            .remove_transaction(id);
 
         Ok(())
     }
@@ -135,18 +155,46 @@ where
         
         transaction.rollback(&mut reef_db)?;
 
-        // Release locks
+        // Rollback MVCC changes
+        self.mvcc_manager.lock()
+            .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?
+            .rollback(id);
+
+        // Release locks and remove from deadlock detector
         self.lock_manager.lock()
             .map_err(|_| ReefDBError::Other("Failed to acquire lock manager".to_string()))?
             .release_transaction_locks(id);
+        
+        self.deadlock_detector.lock()
+            .map_err(|_| ReefDBError::Other("Failed to acquire deadlock detector".to_string()))?
+            .remove_transaction(id);
 
         Ok(())
     }
 
     pub fn acquire_lock(&self, transaction_id: u64, table_name: &str, lock_type: LockType) -> Result<(), ReefDBError> {
-        self.lock_manager.lock()
-            .map_err(|_| ReefDBError::Other("Failed to acquire lock manager".to_string()))?
-            .acquire_lock(transaction_id, table_name, lock_type)
+        let mut lock_manager = self.lock_manager.lock()
+            .map_err(|_| ReefDBError::Other("Failed to acquire lock manager".to_string()))?;
+        
+        // Check for deadlocks before acquiring lock
+        let mut deadlock_detector = self.deadlock_detector.lock()
+            .map_err(|_| ReefDBError::Other("Failed to acquire deadlock detector".to_string()))?;
+        
+        // Add wait-for edge
+        if let Some(holding_tx) = lock_manager.table_locks.get(table_name)
+            .and_then(|locks| locks.first())
+            .map(|(id, _)| *id) {
+            deadlock_detector.add_wait(transaction_id, holding_tx, table_name.to_string());
+            
+            // Check for deadlocks
+            if let Some(victim_tx) = deadlock_detector.detect_deadlock() {
+                if victim_tx == transaction_id {
+                    return Err(ReefDBError::Other("Deadlock detected, transaction aborted".to_string()));
+                }
+            }
+        }
+        
+        lock_manager.acquire_lock(transaction_id, table_name, lock_type)
     }
 }
 
