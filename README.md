@@ -162,133 +162,130 @@ fn main() {
 }
 ```
 
+## Completed Features
+
+### Core Database Features
+- ✅ In-Memory and On-Disk storage modes
+- ✅ Basic SQL statements (CREATE, INSERT, SELECT, UPDATE, DELETE)
+- ✅ ALTER TABLE with ADD/DROP/RENAME column support
+- ✅ DROP TABLE functionality
+- ✅ INNER JOIN support
+- ✅ Primary key constraints
+- ✅ Basic error handling system
+
+### Full-Text Search
+- ✅ FTS_TEXT data type
+- ✅ Inverted index implementation
+- ✅ Basic tokenization
+- ✅ Memory and disk-based index storage
+- ✅ MATCH operator for text search
+
+### Transaction Support
+- ✅ Basic transaction structure
+- ✅ Transaction isolation levels (ReadUncommitted, ReadCommitted, RepeatableRead, Serializable)
+- ✅ Write-Ahead Logging (WAL)
+- ✅ Transaction manager with locking mechanism
+
+### Indexing
+- ✅ B-Tree index implementation
+- ✅ CREATE INDEX and DROP INDEX support
+- ✅ Index persistence for on-disk storage
+- ✅ Basic query optimization with indexes
+
 ## Future Improvements (TODOs)
 
-- [ ] Implement support for more SQL statements:
-  - [x] ALTER TABLE
-  - [x] DROP TABLE
-  - [x] JOIN execution logic
-  - [ ] JOIN parsing for:
-    - [ ] LEFT JOIN
-    - [ ] RIGHT JOIN
-    - [ ] OUTER JOIN
-    - [ ] CROSS JOIN
-    - [ ] FULL JOIN
+### High Priority
 
-- [] Add support for indexing and query optimization:
-  - [x] Implement CREATE INDEX and DROP INDEX SQL statement parsing
-  - [x] Add query optimization logic to use indexes when available
-  - [x] Implement index persistence for on-disk storage mode
-  - [ ] Add Hash indexes for equality comparisons
-  - [ ] Add Bitmap indexes for low-cardinality columns
-  - [ ] Support multi-column indexes
-  - [ ] Implement covering indexes
-  - [ ] Add cost-based optimizer
-  - [ ] Implement statistics collection and maintenance
-  - [ ] Add query plan generation and visualization
-  - [ ] Implement join order optimization
-  - [ ] Add index usage statistics
-  - [ ] Support index hints in queries
+#### Query Processing
+- [ ] Additional JOIN types:
+  - [ ] LEFT JOIN
+  - [ ] RIGHT JOIN
+  - [ ] OUTER JOIN
+  - [ ] CROSS JOIN
+  - [ ] FULL JOIN
+- [ ] Aggregate functions (SUM, COUNT, AVG, MIN, MAX)
+- [ ] GROUP BY and HAVING clauses
+- [ ] ORDER BY clauses
+- [ ] LIMIT and OFFSET support
 
-- [ ] Implement transaction support:
-  - [x] Basic transaction structure
-  - [ ] ACID compliance
-  - [ ] Implement autocommit mode
-  - [ ] Add SAVEPOINT support
-  - [ ] Add ROLLBACK TO SAVEPOINT
-  - [ ] Support transaction isolation levels
-  - [ ] Implement Write-Ahead Logging (WAL)
+#### Transaction Enhancements
+- [ ] Full ACID compliance
+- [ ] Autocommit mode
+- [ ] SAVEPOINT support
+- [ ] Deadlock detection
+- [ ] MVCC implementation
 
-- [ ] Add support for advanced SQL features:
-  - [ ] Aggregate functions (SUM, COUNT, AVG, MIN, MAX)
-  - [ ] GROUP BY clauses
-  - [ ] HAVING clauses
-  - [ ] ORDER BY clauses
-  - [ ] LIMIT and OFFSET
-  - [ ] Window functions
-  - [ ] Subqueries
-  - [ ] Common Table Expressions (CTEs)
-  - [ ] Views
-  - [ ] Stored procedures
-  - [ ] User-defined functions
+#### Index Improvements
+- [ ] Multi-column indexes
+- [ ] Hash indexes for equality comparisons
+- [ ] Bitmap indexes for low-cardinality columns
+- [ ] Cost-based optimizer
+- [ ] Query plan visualization
 
-- [ ] Improve error handling and reporting:
-  - [ ] Add detailed error messages
-  - [ ] Implement error codes
-  - [ ] Add stack traces for debugging
-  - [ ] Improve error recovery
-  - [ ] Add warning system
+### Medium Priority
 
-- [ ] Enhance full-text search:
-  - [ ] Implement stemming
-  - [ ] Add tokenization options
-  - [ ] Support synonyms
-  - [ ] Add language-specific processing
-  - [ ] Implement relevance scoring
-  - [ ] Add phrase searching
-  - [ ] Support fuzzy matching
+#### Full-text Search Enhancements
+- [ ] Stemming support
+- [ ] Advanced tokenization options
+- [ ] Relevance scoring
+- [ ] Phrase searching
+- [ ] Fuzzy matching
+- [ ] Synonym support
 
-- [ ] Implement security features:
-  - [ ] User authentication
-  - [ ] Role-based authorization
-  - [ ] Row-level security
-  - [ ] Column-level security
-  - [ ] Audit logging
-  - [ ] SSL/TLS support
+#### Constraint System
+- [ ] UNIQUE constraints
+- [ ] CHECK constraints
+- [ ] NOT NULL constraints
+- [ ] DEFAULT values
+- [ ] Enhanced FOREIGN KEY support with ON DELETE/UPDATE actions
 
-- [ ] Add distributed features:
-  - [ ] Implement replication using raft-rs
-  - [ ] Add master-slave configuration
-  - [ ] Support sharding
-  - [ ] Implement distributed transactions
-  - [ ] Add consensus protocol
-  - [ ] Support failover
+#### Query Features
+- [ ] Subqueries
+- [ ] Common Table Expressions (CTEs)
+- [ ] Views
+- [ ] Stored procedures
+- [ ] User-defined functions
 
-- [ ] Improve user interface:
-  - [ ] Command-line interface
-  - [ ] Web-based admin interface
-  - [ ] Query visualization
-  - [ ] Performance monitoring dashboard
-  - [ ] Schema visualization
+### Lower Priority
 
-- [ ] Add comprehensive testing:
-  - [ ] Unit tests
-  - [ ] Integration tests
-  - [ ] Performance benchmarks
-  - [ ] Stress tests
-  - [ ] Compatibility tests
-  - [ ] Security tests
+#### Data Types
+- [ ] DATE and TIME types
+- [ ] DECIMAL/NUMERIC types
+- [ ] BOOLEAN type
+- [ ] BLOB/BINARY types
+- [ ] Array types
+- [ ] JSON type
+- [ ] User-defined types
 
-- [ ] Implement constraints:
-  - [ ] UNIQUE constraints
-  - [ ] PRIMARY KEY constraints
-  - [ ] FOREIGN KEY constraints with ON DELETE/UPDATE actions
-  - [ ] CHECK constraints
-  - [ ] NOT NULL constraints
-  - [ ] DEFAULT values
+#### Security Features
+- [ ] User authentication
+- [ ] Role-based authorization
+- [ ] Row-level security
+- [ ] Column-level security
+- [ ] Audit logging
+- [ ] SSL/TLS support
 
-- [ ] Add concurrency support:
-  - [ ] Implement multi-threading
-  - [ ] Add connection pooling
-  - [ ] Implement row-level locking
-  - [ ] Add deadlock detection
-  - [ ] Support MVCC
+#### Distributed Features
+- [ ] Replication using raft-rs
+- [ ] Master-slave configuration
+- [ ] Sharding support
+- [ ] Distributed transactions
+- [ ] Failover support
 
-- [ ] Expand data type support:
-  - [ ] DATE and TIME types
-  - [ ] DECIMAL/NUMERIC types
-  - [ ] BOOLEAN type
-  - [ ] BLOB/BINARY types
-  - [ ] Array types
-  - [ ] JSON type
-  - [ ] User-defined types
+#### Performance Optimization
+- [ ] Query result cache
+- [ ] Index page cache
+- [ ] Buffer pool management
+- [ ] Connection pooling
+- [ ] Query plan optimization
 
-- [ ] Optimize resource management:
-  - [ ] Implement query result cache
-  - [ ] Add index page cache
-  - [ ] Optimize memory usage
-  - [ ] Add buffer pool management
-  - [ ] Implement connection pooling
+#### Developer Experience
+- [ ] Command-line interface
+- [ ] Web-based admin interface
+- [ ] Query visualization
+- [ ] Performance monitoring dashboard
+- [ ] Schema visualization
+- [ ] Comprehensive documentation
 
 ## License
 
