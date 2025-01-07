@@ -7,7 +7,7 @@ use nom::{
 
 use crate::sql::{column::Column, data_value::DataValue, operators::op::Op};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct FTSWhereClause {
     pub col: Column,
     pub query: String,

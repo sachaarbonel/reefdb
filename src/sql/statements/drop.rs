@@ -6,7 +6,7 @@ use nom::{
 
 use super::Statement;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct DropStatement {
     pub table_name: String,
 }
@@ -24,4 +24,31 @@ impl DropStatement {
             }),
         ))
     }
-} 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_drop_table() {
+        let input = "DROP TABLE users";
+        let result = DropStatement::parse(input);
+        assert!(result.is_ok());
+        let (remaining, statement) = result.unwrap();
+        assert_eq!(remaining, "");
+        assert_eq!(
+            statement,
+            Statement::Drop(DropStatement {
+                table_name: "users".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_drop_table_case_insensitive() {
+        let input = "drop TABLE users";
+        let result = DropStatement::parse(input);
+        assert!(result.is_ok());
+    }
+}

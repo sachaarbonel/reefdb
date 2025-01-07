@@ -11,4 +11,7 @@ pub enum ReefDBResult {
     DropTable,
     CreateIndex,
     DropIndex,
+    Savepoint,
+    RollbackToSavepoint,
+    ReleaseSavepoint,
 }

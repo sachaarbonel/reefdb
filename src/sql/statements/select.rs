@@ -19,7 +19,7 @@ use nom::{
 
 use crate::Statement;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum SelectStatement {
     FromTable(String, Vec<Column>, Option<WhereType>, Vec<JoinClause>),
 }

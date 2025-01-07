@@ -9,7 +9,7 @@ use crate::sql::{column::Column, data_value::DataValue, operators::op::Op};
 
 use super::{fts::FTSWhereClause, where_clause::WhereClause};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum WhereType {
     Regular(WhereClause),
     FTS(FTSWhereClause),

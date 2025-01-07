@@ -10,14 +10,14 @@ use nom::{
 use crate::sql::column_def::ColumnDef;
 use super::Statement;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum AlterType {
     AddColumn(ColumnDef),
     DropColumn(String),
     RenameColumn(String, String),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct AlterStatement {
     pub table_name: String,
     pub alter_type: AlterType,

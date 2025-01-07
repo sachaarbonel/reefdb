@@ -1,23 +1,14 @@
+use std::time::SystemTime;
 use crate::{
     error::ReefDBError,
     indexes::fts::search::Search,
-    result::ReefDBResult,
-    sql::statements::Statement,
     storage::Storage,
     ReefDB,
     acid::AcidManager,
+    sql::statements::Statement,
+    result::ReefDBResult,
+    TableStorage,
 };
-
-use std::time::SystemTime;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum TransactionState {
-    Active,
-    Committed,
-    RolledBack,
-    Failed,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IsolationLevel {
@@ -27,6 +18,14 @@ pub enum IsolationLevel {
     Serializable,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransactionState {
+    Active,
+    Committed,
+    RolledBack,
+    Failed,
+}
+
 #[derive(Clone)]
 pub struct Transaction<S: Storage + Clone, FTS: Search + Clone>
 where
@@ -34,9 +33,9 @@ where
 {
     id: u64,
     state: TransactionState,
+    isolation_level: IsolationLevel,
     reef_db: ReefDB<S, FTS>,
     start_timestamp: SystemTime,
-    isolation_level: IsolationLevel,
     acid_manager: AcidManager,
 }
 
@@ -45,44 +44,32 @@ where
     FTS::NewArgs: Clone,
 {
     pub fn create(reef_db: ReefDB<S, FTS>, isolation_level: IsolationLevel) -> Self {
-        static TRANSACTION_ID: AtomicU64 = AtomicU64::new(0);
-        
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        let mut acid_manager = AcidManager::new(reef_db.tables.clone());
+        acid_manager.begin_atomic(&reef_db.tables);
+
         Transaction {
-            id: TRANSACTION_ID.fetch_add(1, Ordering::SeqCst),
+            id,
             state: TransactionState::Active,
+            isolation_level,
             reef_db: reef_db.clone(),
             start_timestamp: SystemTime::now(),
-            isolation_level,
-            acid_manager: AcidManager::new(true),
+            acid_manager,
         }
-    }
-
-    pub fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
-        if self.state != TransactionState::Active {
-            return Err(ReefDBError::Other("Transaction is not active".to_string()));
-        }
-        
-        // Take a snapshot before executing the statement for ACID compliance
-        self.acid_manager.begin_atomic(&self.reef_db.tables);
-        
-        let result = self.reef_db.execute_statement(stmt);
-        if result.is_err() {
-            self.state = TransactionState::Failed;
-            // Rollback to the snapshot
-            self.reef_db.tables = self.acid_manager.rollback_atomic();
-        }
-        result
     }
 
     pub fn commit(&mut self, reef_db: &mut ReefDB<S, FTS>) -> Result<(), ReefDBError> {
         if self.state != TransactionState::Active {
-            return Err(ReefDBError::Other("Transaction is not active".to_string()));
+            return Err(ReefDBError::Other("Transaction cannot be committed".to_string()));
         }
 
-        // Ensure ACID properties during commit
-        self.acid_manager.commit_atomic()?;
+        // Commit changes atomically
+        self.acid_manager.commit()?;
 
-        reef_db.tables = self.reef_db.tables.clone();
+        // Update the database state using restore_from
+        reef_db.tables.restore_from(&self.reef_db.tables);
         reef_db.inverted_index = self.reef_db.inverted_index.clone();
         
         self.state = TransactionState::Committed;
@@ -95,9 +82,9 @@ where
         }
 
         // Rollback to the initial snapshot
-        self.reef_db.tables = self.acid_manager.rollback_atomic();
-        self.reef_db.tables = reef_db.tables.clone();
-        self.reef_db.inverted_index = reef_db.inverted_index.clone();
+        let snapshot = self.acid_manager.rollback_atomic();
+        reef_db.tables.restore_from(&snapshot);
+        self.reef_db.tables.restore_from(&snapshot);
         
         self.state = TransactionState::RolledBack;
         Ok(())
@@ -114,12 +101,51 @@ where
     pub fn get_isolation_level(&self) -> &IsolationLevel {
         &self.isolation_level
     }
+
+    pub fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
+        // Execute the statement on the transaction's copy of the database
+        let result = self.reef_db.execute_statement(stmt);
+        
+        // If successful, update the acid manager's snapshot
+        if result.is_ok() {
+            // Take a snapshot of the current state for ACID compliance
+            let current_state = self.reef_db.tables.clone();
+            self.acid_manager.begin_atomic(&current_state);
+        }
+        
+        result
+    }
+
+    pub(crate) fn restore_table_state(&mut self, snapshot: &TableStorage) {
+        // Create a new clean state for the reef_db
+        let mut new_reef_db = self.reef_db.clone();
+        
+        // Replace the tables completely with the snapshot
+        new_reef_db.tables = snapshot.clone();
+        
+        // Update both the transaction's state and the database state
+        self.reef_db = new_reef_db.clone();
+        
+        // Reset the ACID manager with the new state
+        self.acid_manager = AcidManager::new(snapshot.clone());
+        self.acid_manager.begin_atomic(snapshot);
+        
+        // Update the database state through the transaction manager
+        if let Some(tm) = &mut self.reef_db.transaction_manager {
+            let _ = tm.update_database_state(snapshot.clone());
+        }
+    }
+
+    pub(crate) fn get_table_state(&self) -> TableStorage {
+        self.reef_db.tables.clone()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::InMemoryReefDB;
+    use crate::sql::statements::Statement;
 
     #[test]
     fn test_transactions() {

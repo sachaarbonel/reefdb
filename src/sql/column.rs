@@ -1,6 +1,6 @@
 use nom::{IResult, character::complete::alphanumeric1, sequence::terminated, combinator::opt, bytes::complete::tag};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Column {
     pub name: String,
     pub table: Option<String>,

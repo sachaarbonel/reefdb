@@ -6,7 +6,7 @@ use nom::{
 
 use super::Statement;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct CreateIndexStatement {
     pub table_name: String,
     pub column_name: String,

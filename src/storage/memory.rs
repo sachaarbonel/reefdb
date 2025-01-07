@@ -1,5 +1,6 @@
 use crate::sql::column_def::ColumnDef;
 use std::collections::HashMap;
+use std::any::Any;
 
 use super::Storage;
 use crate::sql::data_value::DataValue;
@@ -106,6 +107,10 @@ impl Storage for InMemoryStorage {
 
     fn remove_table(&mut self, table_name: &str) -> bool {
         self.tables.remove(table_name).is_some()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

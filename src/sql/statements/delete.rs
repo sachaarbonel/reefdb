@@ -8,7 +8,7 @@ use nom::{
 use crate::sql::clauses::wheres::where_type::WhereType;
 
 use super::Statement;
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum DeleteStatement {
     FromTable(String, Option<WhereType>),
 }

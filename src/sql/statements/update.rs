@@ -11,7 +11,7 @@ use crate::sql::{clauses::wheres::where_type::WhereType, data_value::DataValue};
 
 use super::Statement;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum UpdateStatement {
     UpdateTable(String, Vec<(String, DataValue)>, Option<WhereType>),
 }

@@ -4,7 +4,7 @@ pub mod disk;
 pub mod memory;
 
 
-pub trait Storage {
+pub trait Storage: std::any::Any {
     type NewArgs;
     fn new(args: Self::NewArgs) -> Self;
     fn insert_table(
@@ -56,4 +56,6 @@ pub trait Storage {
     }
 
     fn remove_table(&mut self, table_name: &str) -> bool;
+
+    fn as_any(&self) -> &dyn std::any::Any;
 }

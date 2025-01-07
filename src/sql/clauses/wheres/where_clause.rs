@@ -11,7 +11,7 @@ use crate::sql::{
 
 use super::fts::FTSWhereClause;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct WhereClause {
     pub col_name: String,
     pub value: DataValue,

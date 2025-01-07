@@ -153,4 +153,8 @@ impl Storage for OnDiskStorage {
         }
         removed
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
