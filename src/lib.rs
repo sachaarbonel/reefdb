@@ -16,7 +16,8 @@ use sql::{
     data_value::DataValue,
     statements::{
         create::CreateStatement, delete::DeleteStatement, insert::InsertStatement,
-        select::SelectStatement, update::UpdateStatement, Statement,
+        select::SelectStatement, update::UpdateStatement, alter::{AlterStatement, AlterType},
+        drop::DropStatement, Statement,
     },
 };
 
@@ -372,6 +373,63 @@ impl<S: Storage, FTS: Search> ReefDB<S, FTS> {
                     }
                 }
             }
+            Statement::Alter(AlterStatement { table_name, alter_type }) => {
+                if let Some((schema, rows)) = self.tables.get_table(&table_name) {
+                    match alter_type {
+                        AlterType::AddColumn(column_def) => {
+                            schema.push(column_def.clone());
+                            for row in rows.iter_mut() {
+                                row.push(DataValue::Text("NULL".to_string()));
+                            }
+                            if column_def.data_type == DataType::FTSText {
+                                self.inverted_index.add_column(&table_name, &column_def.name);
+                            }
+                            Ok(ReefDBResult::AlterTable)
+                        }
+                        AlterType::DropColumn(column_name) => {
+                            if let Some(col_idx) = schema.iter().position(|col| col.name == column_name) {
+                                schema.remove(col_idx);
+                                for row in rows.iter_mut() {
+                                    row.remove(col_idx);
+                                }
+                                Ok(ReefDBResult::AlterTable)
+                            } else {
+                                Err(ReefDBError::ColumnNotFound(column_name))
+                            }
+                        }
+                        AlterType::RenameColumn(old_name, new_name) => {
+                            if let Some(col) = schema.iter_mut().find(|col| col.name == old_name) {
+                                col.name = new_name;
+                                Ok(ReefDBResult::AlterTable)
+                            } else {
+                                Err(ReefDBError::ColumnNotFound(old_name))
+                            }
+                        }
+                    }
+                } else {
+                    Err(ReefDBError::TableNotFound(table_name))
+                }
+            }
+            Statement::Drop(DropStatement { table_name }) => {
+                if self.tables.table_exists(&table_name) {
+                    // Get FTS columns before removing the table
+                    let fts_columns = self.tables.get_fts_columns(&table_name);
+                    
+                    // Remove the table
+                    self.tables.remove_table(&table_name);
+                    
+                    // Clean up FTS indexes for the table
+                    for column in fts_columns {
+                        // Note: We might want to add a method to remove all FTS entries for a table
+                        // For now, we'll just remove document entries
+                        self.inverted_index.remove_document(&table_name, &column, 0);
+                    }
+                    
+                    Ok(ReefDBResult::DropTable)
+                } else {
+                    Err(ReefDBError::TableNotFound(table_name))
+                }
+            }
         }
     }
 }
@@ -638,5 +696,63 @@ mod tests {
             users[1],
             vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)]
         );
+    }
+
+    #[test]
+    fn test_alter_and_drop() {
+        let mut db = InMemoryReefDB::new();
+
+        let queries = vec![
+            "CREATE TABLE users (name TEXT, age INTEGER)",
+            "INSERT INTO users VALUES ('alice', 30)",
+            "ALTER TABLE users ADD COLUMN email TEXT",
+            "SELECT name, age, email FROM users",
+            "ALTER TABLE users RENAME COLUMN email TO contact",
+            "SELECT name, age, contact FROM users",
+            "ALTER TABLE users DROP COLUMN contact",
+            "SELECT name, age FROM users",
+            "DROP TABLE users",
+            "CREATE TABLE users (name TEXT)",  // Should work as table was dropped
+        ];
+
+        let mut results = Vec::new();
+        for query in queries {
+            results.push(db.query(query));
+        }
+
+        let expected_results = vec![
+            Ok(ReefDBResult::CreateTable),
+            Ok(ReefDBResult::Insert(1)),
+            Ok(ReefDBResult::AlterTable),
+            Ok(ReefDBResult::Select(vec![(
+                0,
+                vec![
+                    DataValue::Text("alice".to_string()),
+                    DataValue::Integer(30),
+                    DataValue::Text("NULL".to_string()),
+                ],
+            )])),
+            Ok(ReefDBResult::AlterTable),
+            Ok(ReefDBResult::Select(vec![(
+                0,
+                vec![
+                    DataValue::Text("alice".to_string()),
+                    DataValue::Integer(30),
+                    DataValue::Text("NULL".to_string()),
+                ],
+            )])),
+            Ok(ReefDBResult::AlterTable),
+            Ok(ReefDBResult::Select(vec![(
+                0,
+                vec![
+                    DataValue::Text("alice".to_string()),
+                    DataValue::Integer(30),
+                ],
+            )])),
+            Ok(ReefDBResult::DropTable),
+            Ok(ReefDBResult::CreateTable),
+        ];
+
+        assert_eq!(results, expected_results);
     }
 }

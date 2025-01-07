@@ -105,6 +105,10 @@ impl Storage for InMemoryStorage {
     fn get_table_ref(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
         self.tables.get(table_name)
     }
+
+    fn remove_table(&mut self, table_name: &str) -> bool {
+        self.tables.remove(table_name).is_some()
+    }
 }
 
 #[cfg(test)]

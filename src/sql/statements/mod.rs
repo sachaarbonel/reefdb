@@ -1,16 +1,17 @@
 use self::{
     create::CreateStatement, delete::DeleteStatement, insert::InsertStatement,
-    select::SelectStatement, update::UpdateStatement,
+    select::SelectStatement, update::UpdateStatement, alter::AlterStatement, drop::DropStatement,
 };
 
 use nom::{branch::alt, character::complete::multispace0, sequence::preceded, IResult};
-
 
 pub mod create;
 pub mod delete;
 pub mod insert;
 pub mod select;
 pub mod update;
+pub mod alter;
+pub mod drop;
 
 #[derive(Debug, PartialEq)]
 pub enum Statement {
@@ -19,6 +20,8 @@ pub enum Statement {
     Select(SelectStatement),
     Update(UpdateStatement),
     Delete(DeleteStatement),
+    Alter(AlterStatement),
+    Drop(DropStatement),
 }
 
 impl Statement {
@@ -31,6 +34,8 @@ impl Statement {
                 SelectStatement::parse,
                 UpdateStatement::parse,
                 DeleteStatement::parse,
+                AlterStatement::parse,
+                DropStatement::parse,
             )),
         )(input)
     }

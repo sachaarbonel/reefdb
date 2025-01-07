@@ -7,4 +7,6 @@ pub enum ReefDBResult {
     CreateTable,
     Update(usize),
     Delete(usize),
+    AlterTable,
+    DropTable,
 }

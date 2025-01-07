@@ -54,4 +54,6 @@ pub trait Storage {
     fn get_schema_ref(&self, table_name: &str) -> Option<&Vec<ColumnDef>> {
         self.get_table_ref(table_name).map(|(schema, _)| schema)
     }
+
+    fn remove_table(&mut self, table_name: &str) -> bool;
 }
