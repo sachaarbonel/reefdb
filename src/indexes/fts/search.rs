@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 pub trait Search {
-    type NewArgs;
+    type NewArgs: Default;
     fn new(args: Self::NewArgs) -> Self;
     fn search(&self, table: &str, column: &str, query: &str) -> HashSet<usize>;
 

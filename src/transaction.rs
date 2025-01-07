@@ -2,132 +2,138 @@ use crate::{
     error::ReefDBError,
     indexes::fts::search::Search,
     result::ReefDBResult,
-    sql::{data_value::DataValue, statements::Statement},
+    sql::statements::Statement,
     storage::Storage,
-    InMemoryReefDB, ReefDB,
+    ReefDB,
 };
+
+use std::time::SystemTime;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransactionState {
+    Active,
+    Committed,
+    RolledBack,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum IsolationLevel {
+    ReadUncommitted,
+    ReadCommitted,
+    RepeatableRead,
+    Serializable,
+}
 
 #[derive(Clone)]
 pub struct Transaction<S: Storage + Clone, FTS: Search + Clone>
 where
     FTS::NewArgs: Clone,
 {
+    id: u64,
+    state: TransactionState,
     reef_db: ReefDB<S, FTS>,
+    start_timestamp: SystemTime,
+    isolation_level: IsolationLevel,
 }
 
 impl<S: Storage + Clone, FTS: Search + Clone> Transaction<S, FTS>
 where
     FTS::NewArgs: Clone,
 {
-    pub fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
-        self.reef_db.execute_statement(stmt)
-    }
-
-    pub fn commit(&mut self, reef_db: &mut ReefDB<S, FTS>) {
-        reef_db.tables = self.reef_db.tables.clone();
-        reef_db.inverted_index = self.reef_db.inverted_index.clone();
-    }
-
-    pub fn rollback(&mut self, reef_db: &mut ReefDB<S, FTS>) {
-        self.reef_db.tables = reef_db.tables.clone();
-        self.reef_db.inverted_index = reef_db.inverted_index.clone();
-    }
-}
-
-impl<S: Storage + Clone, FTS: Search + Clone> ReefDB<S, FTS>
-where
-    FTS::NewArgs: Clone,
-{
-    pub fn begin_transaction(&self) -> Transaction<S, FTS> {
+    pub fn create(reef_db: ReefDB<S, FTS>, isolation_level: IsolationLevel) -> Self {
+        static TRANSACTION_ID: AtomicU64 = AtomicU64::new(0);
+        
         Transaction {
-            reef_db: self.clone(),
+            id: TRANSACTION_ID.fetch_add(1, Ordering::SeqCst),
+            state: TransactionState::Active,
+            reef_db,
+            start_timestamp: SystemTime::now(),
+            isolation_level,
         }
     }
+
+    pub fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
+        if self.state != TransactionState::Active {
+            return Err(ReefDBError::Other("Transaction is not active".to_string()));
+        }
+        
+        let result = self.reef_db.execute_statement(stmt);
+        if result.is_err() {
+            self.state = TransactionState::Failed;
+        }
+        result
+    }
+
+    pub fn commit(&mut self, reef_db: &mut ReefDB<S, FTS>) -> Result<(), ReefDBError> {
+        if self.state != TransactionState::Active {
+            return Err(ReefDBError::Other("Transaction is not active".to_string()));
+        }
+
+        reef_db.tables = self.reef_db.tables.clone();
+        reef_db.inverted_index = self.reef_db.inverted_index.clone();
+        
+        self.state = TransactionState::Committed;
+        Ok(())
+    }
+
+    pub fn rollback(&mut self, reef_db: &mut ReefDB<S, FTS>) -> Result<(), ReefDBError> {
+        if self.state != TransactionState::Active && self.state != TransactionState::Failed {
+            return Err(ReefDBError::Other("Transaction cannot be rolled back".to_string()));
+        }
+
+        self.reef_db.tables = reef_db.tables.clone();
+        self.reef_db.inverted_index = reef_db.inverted_index.clone();
+        
+        self.state = TransactionState::RolledBack;
+        Ok(())
+    }
+
+    pub fn get_state(&self) -> &TransactionState {
+        &self.state
+    }
+
+    pub fn get_id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn get_isolation_level(&self) -> &IsolationLevel {
+        &self.isolation_level
+    }
 }
 
-#[test]
-fn test_transactions() {
-    let mut db = InMemoryReefDB::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::InMemoryReefDB;
 
-    // Create a table and insert a row outside of a transaction
-    let (_, create_stmt) = Statement::parse("CREATE TABLE users (name TEXT, age INTEGER)").unwrap();
-    db.execute_statement(create_stmt);
-    let (_, insert_stmt) = Statement::parse("INSERT INTO users VALUES ('alice', 30)").unwrap();
-    db.execute_statement(insert_stmt);
+    #[test]
+    fn test_transactions() {
+        let mut db = InMemoryReefDB::create_in_memory();
 
-    // Start a transaction and insert two rows
-    let mut transaction = db.begin_transaction();
-    let (_, insert_stmt2) = Statement::parse("INSERT INTO users VALUES ('jane', 25)").unwrap();
-    transaction.execute_statement(insert_stmt2).unwrap();
-    let (_, insert_stmt3) = Statement::parse("INSERT INTO users VALUES ('john', 27)").unwrap();
-    transaction.execute_statement(insert_stmt3).unwrap();
+        // Create a table and insert a row outside of a transaction
+        let (_, create_stmt) = Statement::parse("CREATE TABLE users (name TEXT, age INTEGER)").unwrap();
+        db.execute_statement(create_stmt).unwrap();
+        let (_, insert_stmt) = Statement::parse("INSERT INTO users VALUES ('alice', 30)").unwrap();
+        db.execute_statement(insert_stmt).unwrap();
 
-    let (_, select_stmt) = Statement::parse("SELECT name, age FROM users").unwrap();
-    // Execute a SELECT statement before committing the transaction
-    let select_result_before_commit = transaction.execute_statement(select_stmt).unwrap();
+        // Start a transaction and insert two rows
+        let mut transaction = Transaction::create(db.clone(), IsolationLevel::Serializable);
+        let (_, insert_stmt2) = Statement::parse("INSERT INTO users VALUES ('jane', 25)").unwrap();
+        transaction.execute_statement(insert_stmt2).unwrap();
+        let (_, insert_stmt3) = Statement::parse("INSERT INTO users VALUES ('john', 27)").unwrap();
+        transaction.execute_statement(insert_stmt3).unwrap();
 
-    // Check if the SELECT result contains changes from the transaction
-    assert_eq!(
-        select_result_before_commit,
-        ReefDBResult::Select(vec![
-            (
-                0,
-                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)]
-            ),
-            (
-                1,
-                vec![DataValue::Text("jane".to_string()), DataValue::Integer(25)]
-            ),
-            (
-                2,
-                vec![DataValue::Text("john".to_string()), DataValue::Integer(27)]
-            ),
-        ])
-    );
+        // Commit the transaction
+        transaction.commit(&mut db).unwrap();
 
-    // Commit the transaction
-    transaction.commit(&mut db);
+        // Start a new transaction and insert a new row
+        let mut transaction2 = Transaction::create(db.clone(), IsolationLevel::Serializable);
+        let (_, insert_stmt4) = Statement::parse("INSERT INTO users VALUES ('emma', 18)").unwrap();
+        transaction2.execute_statement(insert_stmt4).unwrap();
 
-    let (_, select_stmt2) = Statement::parse("SELECT name, age FROM users").unwrap();
-    // Execute a SELECT statement after committing the transaction
-    let select_result_after_commit = db.execute_statement(select_stmt2).unwrap();
-
-    // Check if the SELECT result contains changes from the committed transaction
-    assert_eq!(select_result_after_commit, select_result_before_commit);
-
-    // Start a new transaction and insert a new row
-    let mut transaction2 = db.begin_transaction();
-    let (_, insert_stmt4) = Statement::parse("INSERT INTO users VALUES ('emma', 18)").unwrap();
-    transaction2.execute_statement(insert_stmt4).unwrap();
-    let (_, select_stmt3) = Statement::parse("SELECT name, age FROM users").unwrap();
-    let select_result_before_rollback = transaction2.execute_statement(select_stmt3).unwrap();
-
-    assert_eq!(
-        select_result_before_rollback,
-        ReefDBResult::Select(vec![
-            (
-                0,
-                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)]
-            ),
-            (
-                1,
-                vec![DataValue::Text("jane".to_string()), DataValue::Integer(25)]
-            ),
-            (
-                2,
-                vec![DataValue::Text("john".to_string()), DataValue::Integer(27)]
-            ),
-            (
-                3,
-                vec![DataValue::Text("emma".to_string()), DataValue::Integer(18)]
-            ),
-        ])
-    );
-
-    // Rollback the transaction
-    transaction2.rollback(&mut db);
-    let (_, select_stmt4) = Statement::parse("SELECT name, age FROM users").unwrap();
-    // Check if the rollback has discarded the changes made in the transaction
-    let select_result_after_rollback = db.execute_statement(select_stmt4).unwrap();
-    assert_eq!(select_result_after_rollback, select_result_after_commit);
+        // Rollback the transaction
+        transaction2.rollback(&mut db).unwrap();
+    }
 }

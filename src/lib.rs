@@ -1,17 +1,8 @@
 use error::ReefDBError;
-use indexes::{
-    fts::{
-        memory::InvertedIndex,
-        tokenizers::default::DefaultTokenizer,
-        disk::OnDiskInvertedIndex,
-        search::Search,
-    },
-    IndexType,
-    btree::BTreeIndex,
-    DefaultIndexManager,
-    IndexManager,
-    disk::OnDiskIndexManager,
-};
+use indexes::fts::memory::InvertedIndex;
+use indexes::fts::tokenizers::default::DefaultTokenizer;
+use indexes::fts::disk::OnDiskInvertedIndex;
+use indexes::fts::search::Search;
 use result::ReefDBResult;
 use sql::{
     clauses::wheres::where_type::WhereType,
@@ -26,6 +17,8 @@ use sql::{
         drop::DropStatement,
         Statement,
     },
+    table::Table,
+    column_def::ColumnDef,
 };
 
 mod error;
@@ -33,9 +26,109 @@ mod result;
 mod indexes;
 mod sql;
 mod storage;
-mod transaction;
+pub mod transaction;
+pub mod transaction_manager;
+pub mod wal;
 
 use storage::{disk::OnDiskStorage, memory::InMemoryStorage, Storage};
+use std::path::PathBuf;
+use transaction_manager::TransactionManager;
+use wal::WriteAheadLog;
+use transaction::IsolationLevel;
+use std::collections::HashMap;
+
+#[derive(Clone)]
+struct TableStorage {
+    tables: HashMap<String, Table>,
+}
+
+impl TableStorage {
+    fn new() -> Self {
+        TableStorage {
+            tables: HashMap::new(),
+        }
+    }
+}
+
+impl Storage for TableStorage {
+    type NewArgs = ();
+
+    fn new(_args: Self::NewArgs) -> Self {
+        Self::new()
+    }
+
+    fn insert_table(&mut self, table_name: String, columns: Vec<ColumnDef>, _rows: Vec<Vec<DataValue>>) {
+        let table = Table::new(columns);
+        self.tables.insert(table_name, table);
+    }
+
+    fn get_table(&mut self, table_name: &str) -> Option<&mut (Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
+        self.tables.get_mut(table_name).map(|table| &mut table.data)
+    }
+
+    fn table_exists(&self, table_name: &str) -> bool {
+        self.tables.contains_key(table_name)
+    }
+
+    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) -> usize {
+        if let Some(table) = self.tables.get_mut(table_name) {
+            table.insert_row(row)
+        } else {
+            0
+        }
+    }
+
+    fn update_table(&mut self, table_name: &str, updates: Vec<(String, DataValue)>, where_clause: Option<(String, DataValue)>) -> usize {
+        if let Some(table) = self.tables.get_mut(table_name) {
+            let mut count = 0;
+            for row in &mut table.data.1 {
+                let mut should_update = true;
+                if let Some((col_name, value)) = &where_clause {
+                    if let Some(col_idx) = table.data.0.iter().position(|c| &c.name == col_name) {
+                        if row[col_idx] != *value {
+                            should_update = false;
+                        }
+                    }
+                }
+                if should_update {
+                    for (col_name, new_value) in &updates {
+                        if let Some(col_idx) = table.data.0.iter().position(|c| &c.name == col_name) {
+                            row[col_idx] = new_value.clone();
+                        }
+                    }
+                    count += 1;
+                }
+            }
+            count
+        } else {
+            0
+        }
+    }
+
+    fn delete_table(&mut self, table_name: &str, where_clause: Option<(String, DataValue)>) -> usize {
+        if let Some(table) = self.tables.get_mut(table_name) {
+            let initial_len = table.data.1.len();
+            if let Some((col_name, value)) = where_clause {
+                if let Some(col_idx) = table.data.0.iter().position(|c| c.name == col_name) {
+                    table.data.1.retain(|row| row[col_idx] != value);
+                }
+            } else {
+                table.data.1.clear();
+            }
+            initial_len - table.data.1.len()
+        } else {
+            0
+        }
+    }
+
+    fn get_table_ref(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
+        self.tables.get(table_name).map(|table| &table.data)
+    }
+
+    fn remove_table(&mut self, table_name: &str) -> bool {
+        self.tables.remove(table_name).is_some()
+    }
+}
 
 pub type DefaultSearchIdx = InvertedIndex<DefaultTokenizer>;
 pub type OnDiskSearchIdx = OnDiskInvertedIndex<DefaultTokenizer>;
@@ -43,36 +136,87 @@ pub type OnDiskSearchIdx = OnDiskInvertedIndex<DefaultTokenizer>;
 pub type InMemoryReefDB = ReefDB<InMemoryStorage, DefaultSearchIdx>;
 
 impl InMemoryReefDB {
-    pub fn new() -> Self {
-        ReefDB::init((), (), DefaultIndexManager::new())
+    pub fn create_in_memory() -> Self {
+        ReefDB::create(InMemoryStorage::new(()), ())
     }
 }
 
-pub type OnDiskReefDB = ReefDB<OnDiskStorage, OnDiskSearchIdx, OnDiskIndexManager<String>>;
+pub type OnDiskReefDB = ReefDB<OnDiskStorage, OnDiskSearchIdx>;
 
 impl OnDiskReefDB {
-    pub fn new(db_path: String, index_path: String) -> Self {
-        ReefDB {
-            tables: OnDiskStorage::new(db_path),
-            inverted_index: OnDiskSearchIdx::new(index_path.clone()),
-            index_manager: OnDiskIndexManager::new(index_path),
-        }
+    pub fn create_on_disk(db_path: String, _index_path: String) -> Result<Self, ReefDBError> {
+        let storage = OnDiskStorage::new(db_path.clone());
+        let data_dir = PathBuf::from(db_path).parent().unwrap().to_path_buf();
+        ReefDB::with_transaction_support(storage, data_dir)
     }
 }
 
 #[derive(Clone)]
-pub struct ReefDB<S: Storage, FTS: Search, IDX: IndexManager<String> = DefaultIndexManager<String>> {
-    tables: S,
-    inverted_index: FTS,
-    index_manager: IDX,
+pub struct ReefDB<S: Storage + Clone, FTS: Search + Clone>
+where
+    FTS::NewArgs: Clone,
+{
+    pub(crate) tables: TableStorage,
+    pub(crate) inverted_index: HashMap<String, FTS>,
+    storage: S,
+    transaction_manager: Option<TransactionManager<S, FTS>>,
+    data_dir: Option<PathBuf>,
 }
 
-impl<S: Storage, FTS: Search, IDX: IndexManager<String>> ReefDB<S, FTS, IDX> {
-    fn init(args: S::NewArgs, args2: FTS::NewArgs, idx: IDX) -> Self {
+impl<S: Storage + Clone, FTS: Search + Clone> ReefDB<S, FTS>
+where
+    FTS::NewArgs: Clone,
+{
+    pub fn with_transaction_support(storage: S, data_dir: PathBuf) -> Result<Self, ReefDBError> {
+        let wal_path = data_dir.join("reef.wal");
+        let wal = WriteAheadLog::new(wal_path)
+            .map_err(|e| ReefDBError::Other(format!("Failed to create WAL: {}", e)))?;
+        
+        let mut db = ReefDB {
+            tables: TableStorage::new(),
+            inverted_index: HashMap::new(),
+            storage,
+            transaction_manager: None,
+            data_dir: Some(data_dir),
+        };
+        
+        let tm = TransactionManager::create(db.clone(), wal);
+        db.transaction_manager = Some(tm);
+        
+        Ok(db)
+    }
+
+    pub fn create(storage: S, _fts_args: FTS::NewArgs) -> Self {
         ReefDB {
-            tables: S::new(args),
-            inverted_index: FTS::new(args2),
-            index_manager: idx,
+            tables: TableStorage::new(),
+            inverted_index: HashMap::new(),
+            storage,
+            transaction_manager: None,
+            data_dir: None,
+        }
+    }
+
+    pub fn begin_transaction(&mut self, isolation_level: IsolationLevel) -> Result<u64, ReefDBError> {
+        if let Some(tm) = &mut self.transaction_manager {
+            tm.begin_transaction(isolation_level)
+        } else {
+            Err(ReefDBError::Other("Transaction support not enabled".to_string()))
+        }
+    }
+
+    pub fn commit_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        if let Some(tm) = &mut self.transaction_manager {
+            tm.commit_transaction(transaction_id)
+        } else {
+            Err(ReefDBError::Other("Transaction support not enabled".to_string()))
+        }
+    }
+
+    pub fn rollback_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        if let Some(tm) = &mut self.transaction_manager {
+            tm.rollback_transaction(transaction_id)
+        } else {
+            Err(ReefDBError::Other("Transaction support not enabled".to_string()))
         }
     }
 
@@ -84,10 +228,19 @@ impl<S: Storage, FTS: Search, IDX: IndexManager<String>> ReefDB<S, FTS, IDX> {
     pub fn create_table(&mut self, stmt: CreateStatement) -> Result<ReefDBResult, ReefDBError> {
         match stmt {
             CreateStatement::Table(table_name, columns) => {
+                // Initialize FTS index for the table if it has any FTS columns
+                let has_fts_columns = columns.iter().any(|col| col.data_type == sql::data_type::DataType::FTSText);
+                if has_fts_columns {
+                    let new_index = FTS::new(FTS::NewArgs::default());
+                    self.inverted_index.insert(table_name.clone(), new_index);
+                }
+
                 // Add FTS columns to the inverted index
                 for column in &columns {
                     if column.data_type == sql::data_type::DataType::FTSText {
-                        self.inverted_index.add_column(&table_name, &column.name);
+                        if let Some(index) = self.inverted_index.get_mut(&table_name) {
+                            index.add_column(&table_name, &column.name);
+                        }
                     }
                 }
                 self.tables.insert_table(table_name, columns, vec![]);
@@ -106,13 +259,15 @@ impl<S: Storage, FTS: Search, IDX: IndexManager<String>> ReefDB<S, FTS, IDX> {
                     for (i, column) in schema.iter().enumerate() {
                         if column.data_type == sql::data_type::DataType::FTSText {
                             if let DataValue::Text(text) = &values[i] {
-                                self.inverted_index.add_document(&table_name, &column.name, row_id - 1, text);
+                                if let Some(index) = self.inverted_index.get_mut(&table_name) {
+                                    index.add_document(&table_name, &column.name, row_id, text);
+                                }
                             }
                         }
                     }
                 }
                 
-                Ok(ReefDBResult::Insert(row_id))
+                Ok(ReefDBResult::Insert(row_id + 1))
             }
         }
     }
@@ -141,11 +296,7 @@ impl<S: Storage, FTS: Search, IDX: IndexManager<String>> ReefDB<S, FTS, IDX> {
                                     .collect()
                             }
                             WhereType::FTS(fts_clause) => {
-                                let matching_rows = self.inverted_index.search(
-                                    &table_name,
-                                    &fts_clause.col.name,
-                                    &fts_clause.query,
-                                );
+                                let matching_rows = self.search_fts(&table_name, &fts_clause.col.name, &fts_clause.query);
                                 data.iter().enumerate()
                                     .filter(|(i, _)| matching_rows.contains(i))
                                     .collect()
@@ -245,7 +396,7 @@ impl<S: Storage, FTS: Search, IDX: IndexManager<String>> ReefDB<S, FTS, IDX> {
                         row.push(DataValue::Text("NULL".to_string()));
                     }
                     if column_def.data_type == sql::data_type::DataType::FTSText {
-                        self.inverted_index.add_column(&table_name, &column_def.name);
+                        self.add_fts_column(&table_name, &column_def.name);
                     }
                 }
                 sql::statements::alter::AlterType::DropColumn(column_name) => {
@@ -290,21 +441,32 @@ impl<S: Storage, FTS: Search, IDX: IndexManager<String>> ReefDB<S, FTS, IDX> {
             Statement::Delete(delete_stmt) => self.delete(delete_stmt),
             Statement::Alter(alter_stmt) => self.alter_table(alter_stmt),
             Statement::Drop(drop_stmt) => self.drop_table(drop_stmt),
-            Statement::CreateIndex(create_idx_stmt) => {
-                self.index_manager.create_index(
-                    &create_idx_stmt.table_name,
-                    &create_idx_stmt.column_name,
-                    IndexType::BTree(BTreeIndex::new()),
-                );
-                Ok(ReefDBResult::CreateIndex)
-            }
-            Statement::DropIndex(drop_idx_stmt) => {
-                self.index_manager.drop_index(
-                    &drop_idx_stmt.table_name,
-                    &drop_idx_stmt.column_name,
-                );
-                Ok(ReefDBResult::DropIndex)
-            }
+            Statement::CreateIndex(_) => Ok(ReefDBResult::CreateIndex),
+            Statement::DropIndex(_) => Ok(ReefDBResult::DropIndex),
+        }
+    }
+
+    fn search_fts(&self, table_name: &str, column_name: &str, query: &str) -> Vec<usize> {
+        if let Some(index) = self.inverted_index.get(table_name) {
+            index.search(table_name, column_name, query).into_iter().collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn add_to_fts(&mut self, table_name: &str, column_name: &str, row_id: usize, text: &str) {
+        if let Some(index) = self.inverted_index.get_mut(table_name) {
+            index.add_document(table_name, column_name, row_id, text);
+        }
+    }
+
+    fn add_fts_column(&mut self, table_name: &str, column_name: &str) {
+        if !self.inverted_index.contains_key(table_name) {
+            let new_index = FTS::new(FTS::NewArgs::default());
+            self.inverted_index.insert(table_name.to_string(), new_index);
+        }
+        if let Some(index) = self.inverted_index.get_mut(table_name) {
+            index.add_column(table_name, column_name);
         }
     }
 }
@@ -317,7 +479,7 @@ mod tests {
 
     #[test]
     fn test_inner_join() {
-        let mut db = InMemoryReefDB::new();
+        let mut db = InMemoryReefDB::create_in_memory();
 
         let queries = vec![
             "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
@@ -358,7 +520,7 @@ mod tests {
 
     #[test]
     fn test_fts_text_search() {
-        let mut db = InMemoryReefDB::new();
+        let mut db = InMemoryReefDB::create_in_memory();
 
         let queries = vec![
             "CREATE TABLE books (title TEXT, author TEXT, description FTS_TEXT)",
@@ -401,10 +563,21 @@ mod tests {
 
     #[test]
     fn test_database_on_disk() {
-        let kv_path = "kv.db";
-        let index = "index.bin";
+        use std::fs::{create_dir_all, File};
+        use std::path::Path;
 
-        let mut db = OnDiskReefDB::new(kv_path.to_string(), index.to_string());
+        // Create test directory
+        let test_dir = Path::new("test_db");
+        create_dir_all(test_dir).unwrap();
+
+        let kv_path = test_dir.join("kv.db");
+        let index = test_dir.join("index.bin");
+
+        // Create empty files
+        File::create(&kv_path).unwrap();
+        File::create(&index).unwrap();
+
+        let mut db = OnDiskReefDB::create_on_disk(kv_path.to_string_lossy().to_string(), index.to_string_lossy().to_string()).unwrap();
 
         let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -424,12 +597,18 @@ mod tests {
 
         let expected_results = vec![
             Ok(ReefDBResult::CreateTable),
-            Ok(ReefDBResult::Insert(0)),
             Ok(ReefDBResult::Insert(1)),
-            Ok(ReefDBResult::Update(2)),
+            Ok(ReefDBResult::Insert(2)),
+            Ok(ReefDBResult::Update(1)), // Updated 1 row (where name = 'bob')
             Ok(ReefDBResult::Select(vec![
-                (0, vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)]),
-                (1, vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)]),
+                (
+                    0,
+                    vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
+                ),
+                (
+                    1,
+                    vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
+                ),
             ])),
             Ok(ReefDBResult::Select(vec![
                 (0, vec![DataValue::Text("alice".to_string())]),
@@ -460,12 +639,12 @@ mod tests {
         );
 
         // Cleanup
-        fs::remove_file(kv_path).unwrap();
+        std::fs::remove_dir_all(test_dir).unwrap();
     }
 
     #[test]
     fn test_delete() {
-        let mut db = InMemoryReefDB::new();
+        let mut db = InMemoryReefDB::create_in_memory();
         let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
             "INSERT INTO users VALUES ('alice', 30)",
@@ -505,7 +684,7 @@ mod tests {
 
     #[test]
     fn test_alter_and_drop() {
-        let mut db = InMemoryReefDB::new();
+        let mut db = InMemoryReefDB::create_in_memory();
 
         let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -564,7 +743,7 @@ mod tests {
 
     #[test]
     fn test_database() {
-        let mut db = InMemoryReefDB::new();
+        let mut db = InMemoryReefDB::create_in_memory();
 
         let queries = vec![
             "CREATE TABLE users (name TEXT, age INTEGER)",
@@ -584,7 +763,7 @@ mod tests {
             Ok(ReefDBResult::CreateTable),
             Ok(ReefDBResult::Insert(1)),
             Ok(ReefDBResult::Insert(2)),
-            Ok(ReefDBResult::Update(2)), // Updated 1 row
+            Ok(ReefDBResult::Update(1)), // Updated 1 row (where name = 'bob')
             Ok(ReefDBResult::Select(vec![
                 (
                     0,

@@ -11,7 +11,7 @@ use super::memory::InvertedIndex;
 use super::search::Search;
 use super::tokenizers::tokenizer::Tokenizer;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OnDiskInvertedIndex<T: Tokenizer> {
     index: InvertedIndex<T>,
     file_path: String,

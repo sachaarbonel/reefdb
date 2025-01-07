@@ -7,3 +7,4 @@ pub mod data_value;
 pub mod statements;
 pub mod column;
 pub mod operators;
+pub mod table;

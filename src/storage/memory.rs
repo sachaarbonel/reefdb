@@ -56,27 +56,26 @@ impl Storage for InMemoryStorage {
         updates: Vec<(String, DataValue)>,
         where_clause: Option<(String, DataValue)>,
     ) -> usize {
-        //TODO: Option<usize>
-        // None if table doesn't exist or column not found
         let (schema, rows) = self.get_table(table_name).unwrap();
-        let mut idx = 0;
+        let mut last_updated_row_id = 0;
 
-        for row in rows.iter_mut() {
-            if let Some((column, value)) = &where_clause {
+        for (idx, row) in rows.iter_mut().enumerate() {
+            let matches_where = if let Some((column, value)) = &where_clause {
                 let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
-                if row[column_idx] != *value {
-                    idx += 1;
-                    continue;
+                row[column_idx] == *value
+            } else {
+                true
+            };
+
+            if matches_where {
+                for (column, value) in &updates {
+                    let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
+                    row[column_idx] = value.clone();
                 }
+                last_updated_row_id = idx + 1; // Convert to 1-based index
             }
-
-            for (column, value) in &updates {
-                let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
-                row[column_idx] = value.clone();
-            }
-            idx += 1;
         }
-        idx
+        last_updated_row_id
     }
 
     fn delete_table(

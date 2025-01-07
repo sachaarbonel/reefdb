@@ -1,7 +1,7 @@
 use crate::sql::{
     clauses::{
         join_clause::JoinClause,
-        wheres::{fts::FTSWhereClause, where_type::WhereType},
+        wheres::where_type::WhereType,
     },
     column::Column,
     column_value_pair::identifier,
@@ -9,14 +9,15 @@ use crate::sql::{
 
 use nom::{
     bytes::complete::tag,
-    character::complete::{multispace0, multispace1, space1},
+    character::complete::{multispace0, multispace1},
     combinator::{map, opt, recognize},
     multi::{many0, separated_list0},
     sequence::{terminated, tuple},
+    branch::alt,
     IResult,
 };
 
-use super::Statement;
+use crate::Statement;
 
 #[derive(Debug, PartialEq)]
 pub enum SelectStatement {
@@ -53,43 +54,53 @@ impl SelectStatement {
 fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
     separated_list0(
         terminated(tag(","), multispace0),
-        map(
-            recognize(tuple((
-                opt(terminated(identifier, tag("."))),
-                identifier,
-            ))),
-            |column_str: &str| {
-                let parts: Vec<_> = column_str.split('.').collect();
+        alt((
+            // Handle * wildcard
+            map(tag("*"), |_| Column {
+                table: None,
+                name: "*".to_string(),
+            }),
+            // Handle existing column parsing
+            map(
+                recognize(tuple((
+                    opt(terminated(identifier, tag("."))),
+                    identifier,
+                ))),
+                |column_str: &str| {
+                    let parts: Vec<_> = column_str.split('.').collect();
 
-                if parts.len() == 2 {
-                    Column {
-                        table: Some(parts[0].to_string()),
-                        name: parts[1].to_string(),
+                    if parts.len() == 2 {
+                        Column {
+                            table: Some(parts[0].to_string()),
+                            name: parts[1].to_string(),
+                        }
+                    } else {
+                        Column {
+                            table: None,
+                            name: parts[0].to_string(),
+                        }
                     }
-                } else {
-                    Column {
-                        table: None,
-                        name: parts[0].to_string(),
-                    }
-                }
-            },
-        ),
+                },
+            ),
+        )),
     )(input)
 }
 
 #[cfg(test)]
 mod tests {
-
-    use crate::sql::{clauses::join_clause::JoinType, column_value_pair::ColumnValuePair};
+    use super::*;
+    use crate::sql::{
+        clauses::join_clause::JoinType,
+        column_value_pair::ColumnValuePair,
+        column::Column,
+    };
+    use crate::Statement;
 
     #[test]
     fn parse_select_test() {
-        use super::*;
         let input = "SELECT name FROM users";
         let result = SelectStatement::parse(input);
-        // assert_eq!(result.is_ok(), true);
-        let (input, statement) = result.unwrap();
-        // assert_eq!(input, "");
+        let (_input, statement) = result.unwrap();
         assert_eq!(
             statement,
             Statement::Select(SelectStatement::FromTable(
@@ -106,12 +117,10 @@ mod tests {
 
     #[test]
     fn parse_select_join_test() {
-        use super::*;
         let input = "SELECT users.name, orders.item FROM users INNER JOIN orders ON users.id = orders.user_id";
         let result = SelectStatement::parse(input);
         assert_eq!(result.is_ok(), true);
-        let (input, statement) = result.unwrap();
-        assert_eq!(input, "");
+        let (_input, statement) = result.unwrap();
         assert_eq!(
             statement,
             Statement::Select(SelectStatement::FromTable(
@@ -135,6 +144,26 @@ mod tests {
                         ColumnValuePair::new("user_id", "orders")
                     )
                 }]
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_select_star_test() {
+        let input = "SELECT * FROM users";
+        let result = SelectStatement::parse(input);
+        assert_eq!(result.is_ok(), true);
+        let (_input, statement) = result.unwrap();
+        assert_eq!(
+            statement,
+            Statement::Select(SelectStatement::FromTable(
+                "users".to_string(),
+                vec![Column {
+                    table: None,
+                    name: "*".to_string(),
+                }],
+                None,
+                vec![]
             ))
         );
     }

@@ -45,7 +45,7 @@ impl<T: Tokenizer> InvertedIndex<T> {
 
         for word in self.tokenizer.tokenize(text) {
             let word_entry = column_entry
-                .entry(word.to_string())
+                .entry(word.to_lowercase())
                 .or_insert(HashSet::new());
             word_entry.insert(row_id);
         }
@@ -62,22 +62,44 @@ impl<T: Tokenizer> InvertedIndex<T> {
     }
 
     pub fn search(&self, table: &str, column: &str, query: &str) -> HashSet<usize> {
-        let mut results = HashSet::new();
         if let Some(table_entry) = self.index.get(table) {
             if let Some(column_entry) = table_entry.get(column) {
-                for word in self.tokenizer.tokenize(query) {
-                    if let Some(word_entry) = column_entry.get(word) {
-                        results.extend(word_entry);
+                let query_tokens: Vec<String> = self.tokenizer.tokenize(query)
+                    .map(|s| s.to_lowercase())
+                    .collect();
+                
+                if query_tokens.is_empty() {
+                    return HashSet::new();
+                }
+
+                // Get results for first token
+                let mut results = match column_entry.get(&query_tokens[0]) {
+                    Some(word_entry) => word_entry.clone(),
+                    None => return HashSet::new(),
+                };
+
+                // Intersect with results for remaining tokens
+                for token in query_tokens.iter().skip(1) {
+                    if let Some(word_entry) = column_entry.get(token) {
+                        results.retain(|id| word_entry.contains(id));
+                    } else {
+                        return HashSet::new();
                     }
                 }
+                
+                results
+            } else {
+                HashSet::new()
             }
+        } else {
+            HashSet::new()
         }
-        results
     }
 }
 
 impl<T: Tokenizer + Serialize + for<'de> Deserialize<'de>> Search for InvertedIndex<T> {
     type NewArgs = ();
+
     fn new(_: Self::NewArgs) -> Self {
         InvertedIndex::new()
     }
