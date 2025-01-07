@@ -164,21 +164,131 @@ fn main() {
 
 ## Future Improvements (TODOs)
 
-- [ ] Implement support for more SQL statements such as ALTER TABLE, DROP TABLE, and additional JOIN types (LEFT, RIGHT, OUTER).
-- [ ] Add support for indexing and query optimization to improve performance.
-- [ ] Implement transaction support and atomicity for database operations (there is a transaction struct but it's not in autocommit mode like in sqlite)
-- [ ] Add support for user-defined functions, aggregate functions (SUM, COUNT, AVG, MIN, MAX), Grouping and sorting (GROUP BY and ORDER BY), and stored procedures.
-- [ ] Improve error handling and reporting.
-- [ ] Enhance the full-text search capability with more advanced text processing techniques such as stemming, tokenization, and handling of synonyms.
-- [ ] Implement authentication and authorization mechanisms for secure access to the database.
-- [ ] Add support for replication and distributed database management (using raft-rs?)
-- [ ] Implement a command-line interface or GUI for interacting with the database.
-- [ ] Improve documentation and provide examples for using the database in various use cases.
-- [ ] Write benchmarks and performance tests to measure and optimize the database performance.
-- [ ] Enforce constraints such as unique, primary key, foreign key, and check constraints to maintain data integrity.
-- [ ] Implement multi-threading and concurrency control for improved performance and safe parallel access to the database
-- [ ] Add support for handling various data types (e.g., date and time, binary data) and user-defined data types.
-- [ ] Optimize memory management and caching mechanisms for efficient resource utilization.
+- [ ] Implement support for more SQL statements:
+  - [x] ALTER TABLE
+  - [x] DROP TABLE
+  - [x] JOIN execution logic
+  - [ ] JOIN parsing for:
+    - [ ] LEFT JOIN
+    - [ ] RIGHT JOIN
+    - [ ] OUTER JOIN
+    - [ ] CROSS JOIN
+    - [ ] FULL JOIN
+
+- [] Add support for indexing and query optimization:
+  - [x] Implement CREATE INDEX and DROP INDEX SQL statement parsing
+  - [x] Add query optimization logic to use indexes when available
+  - [x] Implement index persistence for on-disk storage mode
+  - [ ] Add Hash indexes for equality comparisons
+  - [ ] Add Bitmap indexes for low-cardinality columns
+  - [ ] Support multi-column indexes
+  - [ ] Implement covering indexes
+  - [ ] Add cost-based optimizer
+  - [ ] Implement statistics collection and maintenance
+  - [ ] Add query plan generation and visualization
+  - [ ] Implement join order optimization
+  - [ ] Add index usage statistics
+  - [ ] Support index hints in queries
+
+- [ ] Implement transaction support:
+  - [x] Basic transaction structure
+  - [ ] ACID compliance
+  - [ ] Implement autocommit mode
+  - [ ] Add SAVEPOINT support
+  - [ ] Add ROLLBACK TO SAVEPOINT
+  - [ ] Support transaction isolation levels
+  - [ ] Implement Write-Ahead Logging (WAL)
+
+- [ ] Add support for advanced SQL features:
+  - [ ] Aggregate functions (SUM, COUNT, AVG, MIN, MAX)
+  - [ ] GROUP BY clauses
+  - [ ] HAVING clauses
+  - [ ] ORDER BY clauses
+  - [ ] LIMIT and OFFSET
+  - [ ] Window functions
+  - [ ] Subqueries
+  - [ ] Common Table Expressions (CTEs)
+  - [ ] Views
+  - [ ] Stored procedures
+  - [ ] User-defined functions
+
+- [ ] Improve error handling and reporting:
+  - [ ] Add detailed error messages
+  - [ ] Implement error codes
+  - [ ] Add stack traces for debugging
+  - [ ] Improve error recovery
+  - [ ] Add warning system
+
+- [ ] Enhance full-text search:
+  - [ ] Implement stemming
+  - [ ] Add tokenization options
+  - [ ] Support synonyms
+  - [ ] Add language-specific processing
+  - [ ] Implement relevance scoring
+  - [ ] Add phrase searching
+  - [ ] Support fuzzy matching
+
+- [ ] Implement security features:
+  - [ ] User authentication
+  - [ ] Role-based authorization
+  - [ ] Row-level security
+  - [ ] Column-level security
+  - [ ] Audit logging
+  - [ ] SSL/TLS support
+
+- [ ] Add distributed features:
+  - [ ] Implement replication using raft-rs
+  - [ ] Add master-slave configuration
+  - [ ] Support sharding
+  - [ ] Implement distributed transactions
+  - [ ] Add consensus protocol
+  - [ ] Support failover
+
+- [ ] Improve user interface:
+  - [ ] Command-line interface
+  - [ ] Web-based admin interface
+  - [ ] Query visualization
+  - [ ] Performance monitoring dashboard
+  - [ ] Schema visualization
+
+- [ ] Add comprehensive testing:
+  - [ ] Unit tests
+  - [ ] Integration tests
+  - [ ] Performance benchmarks
+  - [ ] Stress tests
+  - [ ] Compatibility tests
+  - [ ] Security tests
+
+- [ ] Implement constraints:
+  - [ ] UNIQUE constraints
+  - [ ] PRIMARY KEY constraints
+  - [ ] FOREIGN KEY constraints with ON DELETE/UPDATE actions
+  - [ ] CHECK constraints
+  - [ ] NOT NULL constraints
+  - [ ] DEFAULT values
+
+- [ ] Add concurrency support:
+  - [ ] Implement multi-threading
+  - [ ] Add connection pooling
+  - [ ] Implement row-level locking
+  - [ ] Add deadlock detection
+  - [ ] Support MVCC
+
+- [ ] Expand data type support:
+  - [ ] DATE and TIME types
+  - [ ] DECIMAL/NUMERIC types
+  - [ ] BOOLEAN type
+  - [ ] BLOB/BINARY types
+  - [ ] Array types
+  - [ ] JSON type
+  - [ ] User-defined types
+
+- [ ] Optimize resource management:
+  - [ ] Implement query result cache
+  - [ ] Add index page cache
+  - [ ] Optimize memory usage
+  - [ ] Add buffer pool management
+  - [ ] Implement connection pooling
 
 ## License
 
