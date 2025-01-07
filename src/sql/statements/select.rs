@@ -4,11 +4,12 @@ use crate::sql::{
         wheres::{fts::FTSWhereClause, where_type::WhereType},
     },
     column::Column,
+    column_value_pair::identifier,
 };
 
 use nom::{
     bytes::complete::tag,
-    character::complete::{alphanumeric1, multispace0, multispace1, space1},
+    character::complete::{multispace0, multispace1, space1},
     combinator::{map, opt, recognize},
     multi::{many0, separated_list0},
     sequence::{terminated, tuple},
@@ -30,7 +31,7 @@ impl SelectStatement {
         let (input, _) = multispace1(input)?;
         let (input, _) = tag("FROM")(input)?;
         let (input, _) = multispace1(input)?;
-        let (input, table_name) = alphanumeric1(input)?;
+        let (input, table_name) = identifier(input)?;
 
         let (input, _) = opt(multispace1)(input)?;
         let (input, where_clause) = opt(WhereType::parse)(input)?;
@@ -54,8 +55,8 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
         terminated(tag(","), multispace0),
         map(
             recognize(tuple((
-                opt(terminated(alphanumeric1, tag("."))),
-                alphanumeric1,
+                opt(terminated(identifier, tag("."))),
+                identifier,
             ))),
             |column_str: &str| {
                 let parts: Vec<_> = column_str.split('.').collect();

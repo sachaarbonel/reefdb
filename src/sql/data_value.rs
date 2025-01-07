@@ -1,4 +1,4 @@
-use crate::IResult;
+use nom::IResult;
 use nom::{branch::alt, bytes::complete::tag, combinator::recognize, sequence::delimited};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]

@@ -9,4 +9,6 @@ pub enum ReefDBResult {
     Delete(usize),
     AlterTable,
     DropTable,
+    CreateIndex,
+    DropIndex,
 }

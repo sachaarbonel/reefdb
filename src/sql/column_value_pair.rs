@@ -21,7 +21,7 @@ impl ColumnValuePair {
     }
 }
 
-fn identifier(input: &str) -> IResult<&str, &str> {
+pub fn identifier(input: &str) -> IResult<&str, &str> {
     take_while1(|c: char| c.is_alphanumeric() || c == '_')(input)
 }
 
@@ -30,10 +30,9 @@ impl ColumnValuePair {
         let (input, (table_part, column)) =
             tuple((opt(tuple((identifier, tag(".")))), identifier))(input)?;
 
-        let table_name = match table_part {
-            Some((table, _)) => table.to_string(),
-            None => String::new(),
-        };
+        let table_name = table_part
+            .map(|(table, _)| table.to_string())
+            .unwrap_or_default();
 
         Ok((
             input,

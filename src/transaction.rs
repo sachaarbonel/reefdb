@@ -8,11 +8,17 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct Transaction<S: Storage + Clone, FTS: Search + Clone> {
+pub struct Transaction<S: Storage + Clone, FTS: Search + Clone>
+where
+    FTS::NewArgs: Clone,
+{
     reef_db: ReefDB<S, FTS>,
 }
 
-impl<S: Storage + Clone, FTS: Search + Clone> Transaction<S, FTS> {
+impl<S: Storage + Clone, FTS: Search + Clone> Transaction<S, FTS>
+where
+    FTS::NewArgs: Clone,
+{
     pub fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
         self.reef_db.execute_statement(stmt)
     }
@@ -28,8 +34,10 @@ impl<S: Storage + Clone, FTS: Search + Clone> Transaction<S, FTS> {
     }
 }
 
-// Add this method to the ReefDB struct
-impl<S: Storage + Clone, FTS: Search + Clone> ReefDB<S, FTS> {
+impl<S: Storage + Clone, FTS: Search + Clone> ReefDB<S, FTS>
+where
+    FTS::NewArgs: Clone,
+{
     pub fn begin_transaction(&self) -> Transaction<S, FTS> {
         Transaction {
             reef_db: self.clone(),

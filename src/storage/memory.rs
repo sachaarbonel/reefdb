@@ -42,11 +42,11 @@ impl Storage for InMemoryStorage {
             // Add the new row to the table
             rows.push(row);
 
-            // Return the rowid (index of the newly added row)
-            rows.len() - 1
+            // Return the rowid (1-based index)
+            rows.len()
         } else {
             // Return an error value if the table doesn't exist
-            usize::MAX
+            0
         }
     }
 
@@ -84,22 +84,21 @@ impl Storage for InMemoryStorage {
         table_name: &str,
         where_clause: Option<(String, DataValue)>,
     ) -> usize {
-        //TODO: Option<usize>
-        // None if table doesn't exist or column not found
-        let (schema, rows) = self.get_table(table_name).unwrap();
-        let mut idx = 0;
-
-        for row in rows.iter_mut() {
-            if let Some((column, value)) = &where_clause {
-                let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
-                if row[column_idx] != *value {
-                    idx += 1;
-                    continue;
-                }
+        if let Some((schema, rows)) = self.get_table(table_name) {
+            let initial_len = rows.len();
+            
+            if let Some((column, value)) = where_clause {
+                let column_idx = schema.iter().position(|c| c.name == column).unwrap();
+                rows.retain(|row| row[column_idx] != value);
+                initial_len - rows.len()
+            } else {
+                let count = rows.len();
+                rows.clear();
+                count
             }
-            idx += 1;
+        } else {
+            0
         }
-        idx
     }
 
     fn get_table_ref(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
