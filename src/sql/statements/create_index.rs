@@ -30,4 +30,23 @@ impl CreateIndexStatement {
             }),
         ))
     }
-} 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_index_parse() {
+        assert_eq!(
+            CreateIndexStatement::parse("CREATE INDEX ON users (id)"),
+            Ok((
+                "",
+                Statement::CreateIndex(CreateIndexStatement {
+                    table_name: "users".to_string(),
+                    column_name: "id".to_string(),
+                })
+            ))
+        );
+    }
+}

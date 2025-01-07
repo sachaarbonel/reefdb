@@ -9,6 +9,7 @@ pub(crate) struct AcidManager {
     committed: AtomicBool,
     durability_enabled: bool,
     snapshot: TableStorage,
+    sync_path: Option<std::path::PathBuf>,
 }
 
 impl Clone for AcidManager {
@@ -17,6 +18,7 @@ impl Clone for AcidManager {
             committed: AtomicBool::new(self.committed.load(Ordering::SeqCst)),
             durability_enabled: self.durability_enabled,
             snapshot: self.snapshot.clone(),
+            sync_path: self.sync_path.clone(),
         }
     }
 }
@@ -27,7 +29,12 @@ impl AcidManager {
             committed: AtomicBool::new(false),
             durability_enabled,
             snapshot: TableStorage::new(),
+            sync_path: None,
         }
+    }
+
+    pub(crate) fn set_sync_path(&mut self, path: std::path::PathBuf) {
+        self.sync_path = Some(path);
     }
 
     pub(crate) fn begin_atomic(&mut self, tables: &TableStorage) {
@@ -37,7 +44,7 @@ impl AcidManager {
     pub(crate) fn commit_atomic(&mut self) -> Result<(), ReefDBError> {
         if self.durability_enabled {
             // Ensure data is written to disk
-            sync_to_disk()?;
+            sync_to_disk(self.sync_path.as_deref())?;
         }
         self.committed.store(true, Ordering::SeqCst);
         Ok(())
@@ -48,11 +55,12 @@ impl AcidManager {
     }
 }
 
-fn sync_to_disk() -> Result<(), ReefDBError> {
+fn sync_to_disk(sync_path: Option<&std::path::Path>) -> Result<(), ReefDBError> {
     // Force sync to disk using fsync
     #[cfg(unix)]
     {
-        std::fs::File::create(".sync")
+        let path = sync_path.unwrap_or_else(|| std::path::Path::new(".sync"));
+        std::fs::File::create(path)
             .map_err(|e| ReefDBError::Other(format!("Failed to create sync file: {}", e)))?
             .sync_all()
             .map_err(|e| ReefDBError::Other(format!("Failed to sync to disk: {}", e)))?;
@@ -71,6 +79,9 @@ mod tests {
             data_value::DataValue,
         },
     };
+    use tempfile;
+    use std::thread;
+    use std::time::Duration;
 
     fn create_test_table() -> TableStorage {
         let mut storage = TableStorage::new();
@@ -136,19 +147,31 @@ mod tests {
 
     #[test]
     fn test_commit_atomic() {
+        // Create a temporary directory for test files
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+        let sync_path = temp_dir.path().join(".sync");
+
         // Clean up any existing sync file first
-        let _ = std::fs::remove_file(".sync");
+        let _ = std::fs::remove_file(&sync_path);
 
         let mut manager = AcidManager::new(true);
+        manager.set_sync_path(sync_path.clone());
         let tables = create_test_table();
         manager.begin_atomic(&tables);
+        
+        // Add small delay to ensure file operations complete
         let result = manager.commit_atomic();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        
         assert!(result.is_ok());
         assert!(manager.committed.load(Ordering::SeqCst));
         
-        // Check if sync file was created and then clean up
-        assert!(std::path::Path::new(".sync").exists());
-        let _ = std::fs::remove_file(".sync");
+        // Check if sync file was created
+        assert!(sync_path.exists());
+        
+        // Clean up
+        let _ = std::fs::remove_file(&sync_path);
+        drop(temp_dir); // This will clean up the temporary directory
     }
 
     #[test]
@@ -177,16 +200,24 @@ mod tests {
 
     #[test]
     fn test_durability_disabled() {
+        // Create a temporary directory for test files
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp directory");
+        let sync_path = temp_dir.path().join(".sync");
+
         // Clean up any existing sync file first
-        let _ = std::fs::remove_file(".sync");
+        let _ = std::fs::remove_file(&sync_path);
 
         let mut manager = AcidManager::new(false);
+        manager.set_sync_path(sync_path.clone());
         let tables = create_test_table();
         manager.begin_atomic(&tables);
         let result = manager.commit_atomic();
         assert!(result.is_ok());
         
         // Verify sync file was not created
-        assert!(!std::path::Path::new(".sync").exists());
+        assert!(!sync_path.exists());
+        
+        // Clean up
+        drop(temp_dir);
     }
 } 

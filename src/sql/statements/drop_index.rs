@@ -30,4 +30,23 @@ impl DropIndexStatement {
             }),
         ))
     }
-} 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_drop_index_parse() {
+        assert_eq!(
+            DropIndexStatement::parse("DROP INDEX ON users (id)"),
+            Ok((
+                "",
+                Statement::DropIndex(DropIndexStatement {
+                    table_name: "users".to_string(),
+                    column_name: "id".to_string(),
+                })
+            ))
+        );
+    }
+}

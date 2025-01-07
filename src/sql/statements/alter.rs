@@ -72,4 +72,59 @@ fn parse_rename_column(input: &str) -> IResult<&str, AlterType> {
     let (input, new_name) = alphanumeric1(input)?;
     
     Ok((input, AlterType::RenameColumn(old_name.to_string(), new_name.to_string())))
-} 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sql::data_type::DataType;
+
+    #[test]
+    fn test_alter_add_column() {
+        assert_eq!(
+            AlterStatement::parse("ALTER TABLE users ADD COLUMN age INTEGER"),
+            Ok((
+                "",
+                Statement::Alter(AlterStatement {
+                    table_name: "users".to_string(),
+                    alter_type: AlterType::AddColumn(ColumnDef {
+                        name: "age".to_string(),
+                        data_type: DataType::Integer,
+                        constraints: vec![],
+                    }),
+                })
+            ))
+        );
+    }
+
+    #[test]
+    fn test_alter_drop_column() {
+        assert_eq!(
+            AlterStatement::parse("ALTER TABLE users DROP COLUMN age"),
+            Ok((
+                "",
+                Statement::Alter(AlterStatement {
+                    table_name: "users".to_string(),
+                    alter_type: AlterType::DropColumn("age".to_string()),
+                })
+            ))
+        );
+    }
+
+    #[test]
+    fn test_alter_rename_column() {
+        assert_eq!(
+            AlterStatement::parse("ALTER TABLE users RENAME COLUMN username TO login"),
+            Ok((
+                "",
+                Statement::Alter(AlterStatement {
+                    table_name: "users".to_string(),
+                    alter_type: AlterType::RenameColumn(
+                        "username".to_string(),
+                        "login".to_string()
+                    ),
+                })
+            ))
+        );
+    }
+}
