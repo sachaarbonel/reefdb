@@ -11,6 +11,7 @@ pub mod search_tests;
 pub mod on_disk_tests;
 pub mod mvcc_integration_tests;
 pub mod join_integration_tests;
+pub mod fts_tests;
 
 use crate::sql::{
     column_def::ColumnDef,

@@ -1,10 +1,11 @@
 use super::btree::BTreeIndex;
-use super::fts::search::Search;
+use crate::fts::search::Search;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::fmt::Debug;
 use std::collections::HashSet;
 use serde::{Serialize, Deserialize};
+use crate::fts::default::DefaultSearchIdx;
 
 pub trait SearchIndex: Debug {
     type NewArgs: Clone;
@@ -47,7 +48,7 @@ pub trait IndexManager<T> {
 #[derive(Debug)]
 pub enum IndexType<T> {
     BTree(BTreeIndex),
-    FullText(Box<dyn SearchIndex<NewArgs = T>>),
+    GIN(Box<dyn SearchIndex<NewArgs = T>>),
 }
 
 impl<T> Serialize for IndexType<T> {
@@ -57,7 +58,7 @@ impl<T> Serialize for IndexType<T> {
     {
         match self {
             IndexType::BTree(btree) => btree.serialize(serializer),
-            IndexType::FullText(_) => unimplemented!("FullText index serialization not supported"),
+            IndexType::GIN(_) => unimplemented!("GIN index serialization not supported"),
         }
     }
 }
@@ -76,7 +77,7 @@ impl<T> Clone for IndexType<T> {
     fn clone(&self) -> Self {
         match self {
             IndexType::BTree(btree) => IndexType::BTree(btree.clone()),
-            IndexType::FullText(_) => unimplemented!("FullText index cloning not supported"),
+            IndexType::GIN(_) => unimplemented!("GIN index cloning not supported"),
         }
     }
 }
@@ -138,7 +139,7 @@ impl<T> IndexManager<T> for DefaultIndexManager<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexes::fts::default::DefaultSearchIdx;
+    use crate::fts::default::DefaultSearchIdx;
 
     #[test]
     fn test_btree_index() {

@@ -3,7 +3,7 @@ mod state_handler;
 
 pub use savepoint_handler::SavepointHandler;
 pub use state_handler::{TransactionState, TransactionStateHandler, IsolationLevel};
-
+use crate::fts::search::Search;
 use crate::{
     error::ReefDBError,
     result::ReefDBResult,
@@ -21,7 +21,7 @@ use crate::{
             drop::DropStatement,
         },
     },
-    indexes::fts::search::Search,
+   
     ReefDB,
     acid::AcidManager,
     TableStorage,

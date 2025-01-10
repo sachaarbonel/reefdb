@@ -50,7 +50,7 @@ pub trait Storage: std::any::Any {
         if let Some((schema, _)) = self.get_table_ref(table_name) {
             schema
                 .iter()
-                .filter(|column_def| column_def.data_type == DataType::FTSText)
+                .filter(|column_def| column_def.data_type == DataType::TSVector)
                 .map(|column_def| column_def.name.clone())
                 .collect()
         } else {
@@ -205,7 +205,7 @@ impl Storage for TableStorage {
             schema.push(column_def.clone());
             // Add default value for the new column in all existing rows
             let default_value = match column_def.data_type {
-                DataType::Text | DataType::FTSText => DataValue::Text(String::new()),
+                DataType::Text | DataType::TSVector => DataValue::Text(String::new()),
                 DataType::Integer => DataValue::Integer(0),
             };
             for row in data.iter_mut() {

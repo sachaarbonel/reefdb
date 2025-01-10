@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum DataType {
     Text,
     Integer,
-    FTSText
+    TSVector
 }
 
 impl DataType {
@@ -13,7 +13,7 @@ impl DataType {
         alt((
             map(tag("TEXT"), |_| DataType::Text),
             map(tag("INTEGER"), |_| DataType::Integer),
-            map(tag("FTS_TEXT"), |_| DataType::FTSText),
+            map(tag("TSVECTOR"), |_| DataType::TSVector),
         ))(input)
     }
 }
@@ -27,6 +27,6 @@ mod tests {
 
         assert_eq!(DataType::parse("TEXT"), Ok(("", DataType::Text)));
         assert_eq!(DataType::parse("INTEGER"), Ok(("", DataType::Integer)));
-        assert_eq!(DataType::parse("FTS_TEXT"), Ok(("", DataType::FTSText)));
+        assert_eq!(DataType::parse("TSVECTOR"), Ok(("", DataType::TSVector)));
     }
 }

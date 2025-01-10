@@ -4,7 +4,10 @@ use crate::{
     InMemoryReefDB,
     transaction::IsolationLevel,
     sql::{
-        clauses::wheres::where_type::{WhereType, WhereClause, FTSWhereClause},
+        clauses::{
+            wheres::where_type::WhereType,
+            full_text_search::{FTSClause, TSQuery, QueryType, Language},
+        },
         column::Column,
         column_def::ColumnDef,
         constraints::{
@@ -63,7 +66,7 @@ fn test_create_statement() -> Result<(), ReefDBError> {
     let columns = vec![
         ColumnDef::new("id", DataType::Integer, vec![Constraint::PrimaryKey]),
         ColumnDef::new("title", DataType::Text, vec![]),
-        ColumnDef::new("content", DataType::FTSText, vec![]),  // Full-text search column
+        ColumnDef::new("content", DataType::TSVector, vec![]),  // Full-text search column
     ];
     let result = db.transaction_manager.as_mut().unwrap().execute_statement(transaction_id, Statement::Create(CreateStatement::Table("articles".to_string(), columns)))?;
     assert_eq!(result, ReefDBResult::CreateTable);
@@ -117,10 +120,15 @@ fn test_create_statement() -> Result<(), ReefDBError> {
     assert_eq!(result, ReefDBResult::Insert(1));
 
     // Test FTS search
-    let where_clause = WhereType::FTS(FTSWhereClause {
-        col: Column { name: "content".to_string(), table: None },
-        query: "Rust".to_string(),
-    });
+    let column = Column { name: "content".to_string(), table: None };
+    let query = TSQuery::new("Rust".to_string())
+        .with_type(QueryType::Plain)
+        .with_language(Language::English);
+
+    let where_clause = WhereType::FTS(FTSClause::new(column, query.text)
+        .with_language(Language::English)
+        .with_query_type(QueryType::Plain));
+
     let select_stmt = SelectStatement::FromTable(
         "articles".to_string(),
         vec![Column { name: "*".to_string(), table: None }],

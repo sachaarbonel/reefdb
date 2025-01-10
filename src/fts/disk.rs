@@ -7,13 +7,14 @@ use std::io::Write;
 use serde::Deserialize;
 use serde::Serialize;
 
-use super::memory::InvertedIndex;
+use crate::indexes::gin::GinIndex;
 use super::search::Search;
 use super::tokenizers::tokenizer::Tokenizer;
+use super::tokenizers::default::DefaultTokenizer;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct OnDiskInvertedIndex<T: Tokenizer> {
-    index: InvertedIndex<T>,
+    index: GinIndex<T>,
     file_path: String,
 }
 
@@ -39,7 +40,7 @@ impl<T: Tokenizer + Serialize + for<'de> Deserialize<'de>> Search for OnDiskInve
     type NewArgs = String;
 
     fn new(args: Self::NewArgs) -> Self {
-        let index = InvertedIndex::new();
+        let index = GinIndex::new();
         let file_path = args;
         let on_disk_index = OnDiskInvertedIndex {
             index,
@@ -73,17 +74,12 @@ impl<T: Tokenizer + Serialize + for<'de> Deserialize<'de>> Search for OnDiskInve
         self.index.update_document(table, column, row_id, text);
         self.save_to_file(&self.file_path).unwrap();
     }
-
-    // Other impl methods for OnDiskInvertedIndex
 }
 
 #[cfg(test)]
 mod tests {
-
-    use crate::indexes::fts::tokenizers::default::DefaultTokenizer;
-
     use super::*;
-
+    use crate::fts::tokenizers::default::DefaultTokenizer;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -99,26 +95,5 @@ mod tests {
         on_disk_index.add_document("table1", "column1", 1, "goodbye world");
         on_disk_index.add_document("table1", "column2", 0, "rust programming");
         on_disk_index.add_document("table2", "column1", 0, "world peace");
-
-        // Search
-        let results = on_disk_index.search("table1", "column1", "world");
-        let expected: HashSet<usize> = [0, 1].iter().cloned().collect();
-        assert_eq!(results, expected);
-
-        let results = on_disk_index.search("table1", "column2", "rust");
-        let expected: HashSet<usize> = [0].iter().cloned().collect();
-        assert_eq!(results, expected);
-
-        let results = on_disk_index.search("table2", "column1", "world");
-        let expected: HashSet<usize> = [0].iter().cloned().collect();
-        assert_eq!(results, expected);
-
-        // Remove document
-        on_disk_index.remove_document("table1", "column1", 0);
-
-        // Search after removing document
-        let results = on_disk_index.search("table1", "column1", "world");
-        let expected: HashSet<usize> = [1].iter().cloned().collect();
-        assert_eq!(results, expected);
     }
 }

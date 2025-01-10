@@ -1,4 +1,4 @@
-use nom::{branch::alt, IResult, combinator::map, bytes::complete::tag_no_case};
+use nom::{branch::alt, IResult, combinator::map, bytes::complete::{tag_no_case, tag}};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Op {
@@ -9,11 +9,13 @@ pub enum Op {
     LessThan,
     GreaterThanOrEqual,
     LessThanOrEqual,
+    TextSearch,
 }
 
 impl Op {
     pub fn parse(input: &str) -> IResult<&str, Op> {
         alt((
+            map(tag("@@"), |_| Op::TextSearch),
             map(tag_no_case(">="), |_| Op::GreaterThanOrEqual),
             map(tag_no_case("<="), |_| Op::LessThanOrEqual),
             map(tag_no_case(">"), |_| Op::GreaterThan),
@@ -33,6 +35,7 @@ impl Op {
             Op::GreaterThanOrEqual => left >= right,
             Op::LessThanOrEqual => left <= right,
             Op::Match => false, // FTS matching is handled separately
+            Op::TextSearch => false, // Full-text search matching is handled separately in the FTS module
         }
     }
 }
@@ -51,6 +54,7 @@ mod tests {
         assert_eq!(Op::parse("<"), Ok(("", Op::LessThan)));
         assert_eq!(Op::parse(">="), Ok(("", Op::GreaterThanOrEqual)));
         assert_eq!(Op::parse("<="), Ok(("", Op::LessThanOrEqual)));
+        assert_eq!(Op::parse("@@"), Ok(("", Op::TextSearch)));
     }
 
     #[test]

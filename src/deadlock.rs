@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::SystemTime;
 use crate::transaction::Transaction;
 use crate::storage::Storage;
-use crate::indexes::{index_manager::IndexManager, fts::search::Search};
-use crate::indexes::fts::default::DefaultSearchIdx;
+use crate::indexes::{index_manager::IndexManager};
+use crate::fts::search::Search;
+use crate::fts::default::DefaultSearchIdx;
 use crate::storage::memory::InMemoryStorage;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]

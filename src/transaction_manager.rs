@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tempfile::tempdir;
+use crate::fts::search::Search;
 
 use crate::{
     acid::AcidManager,
@@ -10,7 +11,7 @@ use crate::{
     error::ReefDBError,
     indexes::{
         index_manager::IndexManager,
-        fts::search::Search,
+       
     },
     key_format::KeyFormat,
     locks::LockManager,

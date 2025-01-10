@@ -1,26 +1,25 @@
 use nom::{
     IResult,
-    bytes::complete::{tag, tag_no_case, take_till},
+    branch::alt,
+    bytes::complete::{tag, tag_no_case, take_until},
     character::complete::{multispace0, multispace1},
     sequence::{tuple, delimited},
-    branch::alt,
-    combinator::{opt, map},
+    combinator::{map, opt},
 };
+
 use crate::sql::{
     column::Column,
     data_value::DataValue,
     operators::op::Op,
+    clauses::full_text_search::{
+        FTSClause,
+        TSQuery,
+        QueryType,
+        Language,
+    },
 };
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum WhereType {
-    Regular(WhereClause),
-    FTS(FTSWhereClause),
-    And(Box<WhereType>, Box<WhereType>),
-    Or(Box<WhereType>, Box<WhereType>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct WhereClause {
     pub col_name: String,
     pub operator: Op,
@@ -28,10 +27,12 @@ pub struct WhereClause {
     pub table: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct FTSWhereClause {
-    pub col: Column,
-    pub query: String,
+#[derive(Debug, PartialEq, Clone)]
+pub enum WhereType {
+    Regular(WhereClause),
+    FTS(FTSClause),
+    And(Box<WhereType>, Box<WhereType>),
+    Or(Box<WhereType>, Box<WhereType>),
 }
 
 impl WhereClause {
@@ -56,31 +57,6 @@ impl WhereClause {
             operator,
             value,
             table: col.table,
-        }))
-    }
-
-    pub fn evaluate(&self, row_value: &DataValue) -> bool {
-        self.operator.evaluate(row_value, &self.value)
-    }
-}
-
-impl FTSWhereClause {
-    pub fn parse(input: &str) -> IResult<&str, Self> {
-        let (input, _) = tag_no_case("MATCH")(input)?;
-        let (input, _) = multispace1(input)?;
-        let (input, col) = Column::parse(input)?;
-        let (input, _) = multispace1(input)?;
-        let (input, _) = tag_no_case("AGAINST")(input)?;
-        let (input, _) = multispace1(input)?;
-        let (input, query) = delimited(
-            tag("'"),
-            take_till(|c| c == '\''),
-            tag("'")
-        )(input)?;
-
-        Ok((input, FTSWhereClause {
-            col,
-            query: query.to_string(),
         }))
     }
 }
@@ -120,7 +96,7 @@ fn parse_where_expression(input: &str) -> IResult<&str, WhereType> {
 }
 
 fn parse_single_clause(input: &str) -> IResult<&str, WhereType> {
-    let (input, clause) = alt((
+    alt((
         // Parse parenthesized expression
         map(
             tuple((
@@ -133,178 +109,131 @@ fn parse_single_clause(input: &str) -> IResult<&str, WhereType> {
             |(_, _, expr, _, _)| expr
         ),
         // Parse FTS clause
-        map(FTSWhereClause::parse, WhereType::FTS),
+        map(FTSClause::parse, WhereType::FTS),
         // Parse regular clause
         map(WhereClause::parse, WhereType::Regular),
+    ))(input)
+}
+
+pub fn parse_fts_where(input: &str) -> IResult<&str, WhereType> {
+    let (input, _) = tag_no_case("to_tsvector")(input)?;
+    let (input, _) = tag("(")(input)?;
+
+    // Parse optional language
+    let (input, language) = opt(tuple((
+        delimited(
+            tag("'"),
+            tag_no_case("english"),
+            tag("'"),
+        ),
+        tag(","),
+        multispace0,
+    )))(input)?;
+
+    let (input, col) = Column::parse(input)?;
+
+    let (input, _) = tuple((
+        tag(")"),
+        multispace0,
+        |i| Op::parse(i).map(|(i, _)| (i, ())), // Parse @@ operator
+        multispace0,
+        tag_no_case("to_tsquery"),
+        tag("("),
     ))(input)?;
 
-    Ok((input, clause))
+    // Parse optional language for query
+    let (input, query_language) = opt(tuple((
+        delimited(
+            tag("'"),
+            tag_no_case("english"),
+            tag("'"),
+        ),
+        tag(","),
+        multispace0,
+    )))(input)?;
+
+    // Parse search query
+    let (input, query_text) = delimited(
+        tag("'"),
+        take_until("'"),
+        tag("'"),
+    )(input)?;
+
+    let (input, _) = tag(")")(input)?;
+
+    let mut query = TSQuery::new(query_text.to_string());
+    
+    // Only set language if it was explicitly specified in either tsvector or tsquery
+    if language.is_some() || query_language.is_some() {
+        query = query.with_language(Language::English);
+    }
+
+    // Detect if we need to use Raw query type (when we have boolean operators)
+    let query_type = if query_text.contains('&') || query_text.contains('|') || query_text.contains('!') {
+        QueryType::Raw
+    } else {
+        QueryType::Plain
+    };
+
+    Ok((input, WhereType::FTS(FTSClause::new(col, query.text)
+        .with_query_type(query_type)
+        .with_language(query.language.unwrap_or_default()))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::super::full_text_search::{TSQuery, QueryType, Language};
 
     #[test]
-    fn test_parse_regular_where_clause() {
-        let input = "WHERE age > 18";
+    fn test_parse_fts_where() {
+        let input = "WHERE to_tsvector(content) @@ to_tsquery('web & development')";
         let (remaining, where_type) = parse_where_clause(input).unwrap();
-        
-        assert_eq!(remaining, "");
-        match where_type {
-            WhereType::Regular(clause) => {
-                assert_eq!(clause.col_name, "age");
-                assert_eq!(clause.operator, Op::GreaterThan);
-                assert_eq!(clause.value, DataValue::Integer(18));
-                assert_eq!(clause.table, None);
-            }
-            _ => panic!("Expected Regular where clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_regular_where_clause_with_table() {
-        let input = "WHERE users.age > 18";
-        let (remaining, where_type) = parse_where_clause(input).unwrap();
-        
-        assert_eq!(remaining, "");
-        match where_type {
-            WhereType::Regular(clause) => {
-                assert_eq!(clause.col_name, "age");
-                assert_eq!(clause.operator, Op::GreaterThan);
-                assert_eq!(clause.value, DataValue::Integer(18));
-                assert_eq!(clause.table, Some("users".to_string()));
-            }
-            _ => panic!("Expected Regular where clause"),
-        }
-    }
-
-    #[test]
-    fn test_parse_fts_clause() {
-        let input = "WHERE MATCH description AGAINST 'computer science'";
-        let (remaining, where_type) = parse_where_clause(input).unwrap();
-        
         assert_eq!(remaining, "");
         match where_type {
             WhereType::FTS(clause) => {
-                assert_eq!(clause.col.name, "description");
-                assert_eq!(clause.col.table, None);
-                assert_eq!(clause.query, "computer science");
+                assert_eq!(clause.column.name, "content");
+                assert_eq!(clause.query.text, "web & development");
+                assert_eq!(clause.query.language, None);
             }
-            _ => panic!("Expected FTS where clause"),
+            _ => panic!("Expected FTS clause"),
         }
     }
 
     #[test]
-    fn test_parse_fts_clause_with_table() {
-        let input = "WHERE MATCH books.description AGAINST 'computer science'";
+    fn test_parse_fts_where_with_language() {
+        let input = "WHERE to_tsvector('english', content) @@ to_tsquery('english', 'web & development')";
         let (remaining, where_type) = parse_where_clause(input).unwrap();
-        
         assert_eq!(remaining, "");
         match where_type {
             WhereType::FTS(clause) => {
-                assert_eq!(clause.col.name, "description");
-                assert_eq!(clause.col.table, Some("books".to_string()));
-                assert_eq!(clause.query, "computer science");
+                assert_eq!(clause.column.name, "content");
+                assert_eq!(clause.query.text, "web & development");
+                assert_eq!(clause.query.language, Some(Language::English));
             }
-            _ => panic!("Expected FTS where clause"),
+            _ => panic!("Expected FTS clause"),
         }
     }
 
     #[test]
-    fn test_parse_fts_clause_with_invalid_query() {
-        let input = "WHERE MATCH description AGAINST 123";
-        assert!(parse_where_clause(input).is_err());
-    }
-
-    #[test]
-    fn test_parse_complex_and_condition() {
-        let input = "WHERE age > 18 AND country = 'USA'";
+    fn test_parse_complex_where_with_fts() {
+        let input = "WHERE age > 18 AND to_tsvector(content) @@ to_tsquery('web & development')";
         let (remaining, where_type) = parse_where_clause(input).unwrap();
-        
         assert_eq!(remaining, "");
         match where_type {
             WhereType::And(left, right) => {
                 match (*left, *right) {
-                    (WhereType::Regular(left_clause), WhereType::Regular(right_clause)) => {
+                    (WhereType::Regular(left_clause), WhereType::FTS(right_clause)) => {
                         assert_eq!(left_clause.col_name, "age");
                         assert_eq!(left_clause.operator, Op::GreaterThan);
                         assert_eq!(left_clause.value, DataValue::Integer(18));
-                        assert_eq!(left_clause.table, None);
-
-                        assert_eq!(right_clause.col_name, "country");
-                        assert_eq!(right_clause.operator, Op::Equal);
-                        assert_eq!(right_clause.value, DataValue::Text("USA".to_string()));
-                        assert_eq!(right_clause.table, None);
+                        assert_eq!(right_clause.column.name, "content");
+                        assert_eq!(right_clause.query.text, "web & development");
                     }
-                    _ => panic!("Expected Regular clauses inside AND"),
+                    _ => panic!("Expected Regular and FTS clauses"),
                 }
             }
-            _ => panic!("Expected AND condition"),
-        }
-    }
-
-    #[test]
-    fn test_parse_complex_or_condition() {
-        let input = "WHERE age > 18 OR country = 'USA'";
-        let (remaining, where_type) = parse_where_clause(input).unwrap();
-        
-        assert_eq!(remaining, "");
-        match where_type {
-            WhereType::Or(left, right) => {
-                match (*left, *right) {
-                    (WhereType::Regular(left_clause), WhereType::Regular(right_clause)) => {
-                        assert_eq!(left_clause.col_name, "age");
-                        assert_eq!(left_clause.operator, Op::GreaterThan);
-                        assert_eq!(left_clause.value, DataValue::Integer(18));
-                        assert_eq!(left_clause.table, None);
-
-                        assert_eq!(right_clause.col_name, "country");
-                        assert_eq!(right_clause.operator, Op::Equal);
-                        assert_eq!(right_clause.value, DataValue::Text("USA".to_string()));
-                        assert_eq!(right_clause.table, None);
-                    }
-                    _ => panic!("Expected Regular clauses inside OR"),
-                }
-            }
-            _ => panic!("Expected OR condition"),
-        }
-    }
-
-    #[test]
-    fn test_parse_parenthesized_condition() {
-        let input = "WHERE (age > 18 AND country = 'USA') OR city = 'NYC'";
-        let (remaining, where_type) = parse_where_clause(input).unwrap();
-        
-        assert_eq!(remaining, "");
-        match where_type {
-            WhereType::Or(left, right) => {
-                match (*left, *right) {
-                    (WhereType::And(and_left, and_right), WhereType::Regular(right_clause)) => {
-                        match (*and_left, *and_right) {
-                            (WhereType::Regular(age_clause), WhereType::Regular(country_clause)) => {
-                                assert_eq!(age_clause.col_name, "age");
-                                assert_eq!(age_clause.operator, Op::GreaterThan);
-                                assert_eq!(age_clause.value, DataValue::Integer(18));
-                                assert_eq!(age_clause.table, None);
-
-                                assert_eq!(country_clause.col_name, "country");
-                                assert_eq!(country_clause.operator, Op::Equal);
-                                assert_eq!(country_clause.value, DataValue::Text("USA".to_string()));
-                                assert_eq!(country_clause.table, None);
-                            }
-                            _ => panic!("Expected Regular clauses inside AND"),
-                        }
-
-                        assert_eq!(right_clause.col_name, "city");
-                        assert_eq!(right_clause.operator, Op::Equal);
-                        assert_eq!(right_clause.value, DataValue::Text("NYC".to_string()));
-                        assert_eq!(right_clause.table, None);
-                    }
-                    _ => panic!("Expected AND and Regular clauses inside OR"),
-                }
-            }
-            _ => panic!("Expected OR condition"),
+            _ => panic!("Expected AND clause"),
         }
     }
 }

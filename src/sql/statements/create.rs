@@ -43,12 +43,12 @@ mod tests {
 
     //create full text search table
     #[test]
-    fn parse_data_type_fts_text(){
+    fn parse_data_type_tsvector(){
         use super::CreateStatement;
         use crate::sql::column_def::ColumnDef;
 
         assert_eq!(
-            CreateStatement::parse("CREATE TABLE users (id INTEGER, name TEXT, fts FTS_TEXT)"),
+            CreateStatement::parse("CREATE TABLE users (id INTEGER, name TEXT, fts TSVECTOR)"),
             Ok((
                 "",
                 Statement::Create(CreateStatement::Table(
@@ -67,7 +67,7 @@ mod tests {
                         },
                         ColumnDef {
                             name: "fts".to_string(),
-                            data_type: DataType::FTSText,
+                            data_type: DataType::TSVector,
                             constraints: vec![],
                         },
                     ]

@@ -161,7 +161,7 @@ impl Storage for InMemoryStorage {
             schema.push(column_def.clone());
             // Add default value for the new column in all existing rows
             let default_value = match column_def.data_type {
-                DataType::Text | DataType::FTSText => DataValue::Text(String::new()),
+                DataType::Text | DataType::TSVector => DataValue::Text(String::new()),
                 DataType::Integer => DataValue::Integer(0),
             };
             for row in data.iter_mut() {

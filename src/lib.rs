@@ -1,5 +1,3 @@
-use crate::storage::memory::InMemoryStorage;
-use crate::indexes::fts::default::DefaultSearchIdx;
 use crate::sql::{
     statements::{
         Statement,
@@ -24,13 +22,13 @@ use crate::sql::{
 };
 use crate::result::ReefDBResult;
 use crate::error::ReefDBError;
-use crate::transaction::{Transaction, IsolationLevel};
+use crate::transaction::IsolationLevel;
 use crate::transaction_manager::TransactionManager;
 use crate::wal::WriteAheadLog;
 use crate::mvcc::MVCCManager;
 use crate::storage::{Storage, TableStorage};
 use crate::indexes::{index_manager::IndexManager, btree::BTreeIndex, index_manager::IndexType};
-use crate::indexes::fts::search::Search;
+use crate::fts::search::Search;
 use std::any::Any;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
@@ -49,15 +47,16 @@ pub mod indexes;
 pub mod savepoint;
 pub mod locks;
 pub mod key_format;
+pub mod fts;
 #[cfg(test)]
 pub mod tests;
 
-pub type InMemoryReefDB = ReefDB<storage::memory::InMemoryStorage, indexes::fts::default::DefaultSearchIdx>;
-pub type OnDiskReefDB = ReefDB<storage::disk::OnDiskStorage, indexes::fts::default::DefaultSearchIdx>;
+pub type InMemoryReefDB = ReefDB<storage::memory::InMemoryStorage, fts::default::DefaultSearchIdx>;
+pub type OnDiskReefDB = ReefDB<storage::disk::OnDiskStorage, fts::default::DefaultSearchIdx>;
 
 impl InMemoryReefDB {
     pub fn create_in_memory() -> Result<Self, ReefDBError> {
-        let mut db = ReefDB::<storage::memory::InMemoryStorage, indexes::fts::default::DefaultSearchIdx>::create_with_args(
+        let mut db = ReefDB::<storage::memory::InMemoryStorage, fts::default::DefaultSearchIdx>::create_with_args(
             storage::memory::InMemoryStorage::new(()),
             Default::default(),
         );
@@ -70,8 +69,8 @@ impl InMemoryReefDB {
 }
 
 impl OnDiskReefDB {
-    pub fn create_on_disk(kv_path: String, index_path: String) -> Result<Self, ReefDBError> {
-        let mut db = ReefDB::<storage::disk::OnDiskStorage, indexes::fts::default::DefaultSearchIdx>::create_with_args(
+    pub fn create_on_disk(kv_path: String, _index_path: String) -> Result<Self, ReefDBError> {
+        let mut db = ReefDB::<storage::disk::OnDiskStorage, fts::default::DefaultSearchIdx>::create_with_args(
             storage::disk::OnDiskStorage::new(kv_path.clone()),
             Default::default(),
         );
@@ -153,7 +152,7 @@ where
 
         // Register FTS columns with the inverted index
         for column in columns.iter() {
-            if column.data_type == DataType::FTSText {
+            if column.data_type == DataType::TSVector {
                 self.inverted_index.add_column(&name, &column.name);
             }
         }
@@ -200,7 +199,7 @@ where
 
         // Update FTS index for any FTS columns
         for (i, col) in schema.iter().enumerate() {
-            if col.data_type == DataType::FTSText {
+            if col.data_type == DataType::TSVector {
                 if let DataValue::Text(text) = &values[i] {
                     self.inverted_index.add_document(&table_name, &col.name, row_id, text);
                 }
@@ -368,13 +367,13 @@ where
                 Ok(clause.operator.evaluate(&row_to_check[col_idx], &clause.value))
             }
             WhereType::FTS(clause) => {
-                let table_name = if let Some(table) = &clause.col.table {
+                let table_name = if let Some(table) = &clause.column.table {
                     table
                 } else {
                     main_table
                 };
-                let col_name = &clause.col.name;
-                let query = &clause.query;
+                let col_name = &clause.column.name;
+                let query = &clause.query.text;
                 
                 // Get the row ID from the current row
                 let row_id = match row.first()
@@ -451,8 +450,8 @@ where
                 }
             }
             WhereType::FTS(clause) => {
-                if !schema.iter().any(|c| c.name == clause.col.name) {
-                    return Err(ReefDBError::ColumnNotFound(clause.col.name.clone()));
+                if !schema.iter().any(|c| c.name == clause.column.name) {
+                    return Err(ReefDBError::ColumnNotFound(clause.column.name.clone()));
                 }
             }
             WhereType::And(left, right) => {

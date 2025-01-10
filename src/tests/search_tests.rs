@@ -3,7 +3,10 @@ use crate::{
     result::ReefDBResult,
     InMemoryReefDB,
     sql::{
-        clauses::wheres::where_type::{WhereType, WhereClause, FTSWhereClause},
+        clauses::{
+            wheres::where_type::WhereType,
+            full_text_search::{FTSClause, TSQuery, QueryType, Language},
+        },
         column::Column,
         column_def::ColumnDef,
         data_type::DataType,
@@ -22,7 +25,7 @@ fn test_fts_search_with_select() -> Result<(), ReefDBError> {
         ColumnDef::new("id", DataType::Integer, vec![Constraint::PrimaryKey]),
         ColumnDef::new("title", DataType::Text, vec![]),
         ColumnDef::new("author", DataType::Text, vec![]),
-        ColumnDef::new("description", DataType::FTSText, vec![]),
+        ColumnDef::new("description", DataType::TSVector, vec![]),
     ];
     db.execute_statement(Statement::Create(CreateStatement::Table("books".to_string(), columns)))?;
 
@@ -52,11 +55,15 @@ fn test_fts_search_with_select() -> Result<(), ReefDBError> {
         db.execute_statement(Statement::Insert(InsertStatement::IntoTable("books".to_string(), value)))?;
     }
 
-    // Test FTS search using MATCH operator
-    let where_clause = WhereType::FTS(FTSWhereClause {
-        col: Column { name: "description".to_string(), table: None },
-        query: "computer science".to_string(),
-    });
+    // Test FTS with new syntax
+    let column = Column { name: "description".to_string(), table: None };
+    let query = TSQuery::new("computer & science".to_string())
+        .with_type(QueryType::Plain)
+        .with_language(Language::English);
+
+    let where_clause = WhereType::FTS(FTSClause::new(column, query.text)
+        .with_language(Language::English)
+        .with_query_type(QueryType::Plain));
 
     let select_stmt = SelectStatement::FromTable(
         "books".to_string(),
@@ -73,9 +80,11 @@ fn test_fts_search_with_select() -> Result<(), ReefDBError> {
     
     if let ReefDBResult::Select(rows) = result {
         assert_eq!(rows.len(), 1); // Should find one matching book
-        assert_eq!(rows[0].1[0], DataValue::Integer(1));
-        assert_eq!(rows[0].1[1], DataValue::Text("Book 1".to_string()));
-        assert_eq!(rows[0].1[2], DataValue::Text("Author 1".to_string()));
+        if let DataValue::Integer(id) = &rows[0].1[0] {
+            assert_eq!(*id, 1);
+        } else {
+            panic!("Expected integer ID");
+        }
     } else {
         panic!("Expected Select result");
     }

@@ -22,7 +22,7 @@ fn main() {
     db.query("SELECT * FROM users WHERE id = 1");
     
     // Full-text search
-    db.query("CREATE TABLE books (title TEXT, description FTS_TEXT)");
+    db.query("CREATE TABLE books (title TEXT, description TSVECTOR)");
     db.query("INSERT INTO books VALUES ('Book 1', 'A book about computer science')");
     db.query("SELECT title FROM books WHERE description MATCH 'computer'");
     
@@ -56,7 +56,7 @@ fn main() {
 - ✅ Basic error handling system
 
 ### Full-Text Search
-- ✅ FTS_TEXT data type
+- ✅ TSVECTOR data type
 - ✅ Inverted index implementation
 - ✅ Basic tokenization
 - ✅ Memory and disk-based index storage
@@ -151,8 +151,8 @@ fn main() {
 
 #### Full-text Search Enhancements
 - [ ] Advanced Index Types
-  - [ ] BM25 scoring with configurable parameters
-  - [ ] TF-IDF with normalization options
+  - [x] BM25 scoring with configurable parameters
+  - [x] TF-IDF with normalization options
   - [ ] Custom scoring functions
   - [ ] Position-aware indexing
   - [ ] Field norms support
@@ -165,6 +165,10 @@ fn main() {
   - [ ] Phrase queries with slop
   - [ ] Query rewriting and optimization
   - [ ] Query expansion
+  - [ ] Prefix matching (e.g., `web:*`)
+  - [ ] Complex boolean expressions with parentheses
+  - [ ] Result ranking with `ts_rank`
+  - [ ] Text highlighting with `ts_headline`
 
 #### Vector Search Capabilities
 - [ ] Vector Data Types and Operations

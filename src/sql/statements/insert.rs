@@ -4,8 +4,9 @@ use nom::{
     bytes::complete::tag,
     character::complete::{alphanumeric1, multispace0, multispace1},
     multi::separated_list0,
-    sequence::{delimited, terminated},
+    sequence::{delimited, tuple},
     IResult,
+    combinator::opt,
 };
 
 use super::Statement;
@@ -20,13 +21,30 @@ impl InsertStatement {
         let (input, _) = tag("INSERT INTO")(input)?;
         let (input, _) = multispace1(input)?;
         let (input, table_name) = alphanumeric1(input)?;
-        let (input, _) = multispace1(input)?;
+        let (input, _) = multispace0(input)?;
+        
+        // Optional column names
+        let (input, _) = opt(tuple((
+            tag("("),
+            multispace0,
+            separated_list0(
+                tuple((multispace0, tag(","), multispace0)),
+                alphanumeric1
+            ),
+            multispace0,
+            tag(")")
+        )))(input)?;
+        
+        let (input, _) = multispace0(input)?;
         let (input, _) = tag("VALUES")(input)?;
-        let (input, _) = multispace1(input)?;
+        let (input, _) = multispace0(input)?;
         let (input, values) = delimited(
             tag("("),
-            separated_list0(terminated(tag(","), multispace0), DataValue::parse),
-            tag(")"),
+            separated_list0(
+                tuple((multispace0, tag(","), multispace0)),
+                DataValue::parse
+            ),
+            tag(")")
         )(input)?;
 
         let values: Vec<DataValue> = values.into_iter().collect();
@@ -40,40 +58,59 @@ impl InsertStatement {
 
 #[cfg(test)]
 mod tests {
-    use crate::sql::{data_value::DataValue, statements::insert::InsertStatement};
+    use super::*;
+    use crate::sql::statements::Statement;
 
     #[test]
-    fn parse_3_test() {
-        let input = "INSERT INTO users VALUES (1, 'Alice')";
-       
-        assert_eq!(
-            InsertStatement::parse(input),
-            Ok((
-                "",
-                super::Statement::Insert(InsertStatement::IntoTable(
-                    "users".to_string(),
-                    vec![
-                        DataValue::Integer(1),
-                        DataValue::Text("Alice".to_string())
-                    ]
-                ))
-            ))
-        );
+    fn parse_insert_with_columns() {
+        let input = "INSERT INTO users(id,name) VALUES(1,'Alice')";
+        let (remaining, stmt) = InsertStatement::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        match stmt {
+            Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
+                assert_eq!(table_name, "users");
+                assert_eq!(values, vec![
+                    DataValue::Integer(1),
+                    DataValue::Text("Alice".to_string()),
+                ]);
+            }
+            _ => panic!("Expected Insert statement"),
+        }
     }
-    #[test]
-    fn parse_2_test() {
-        use crate::sql::data_value::DataValue;
-        use crate::sql::statements::Statement;
 
-        assert_eq!(
-            InsertStatement::parse("INSERT INTO users VALUES (1, 'Alice')"),
-            Ok((
-                "",
-                Statement::Insert(InsertStatement::IntoTable(
-                    "users".to_string(),
-                    vec![DataValue::Integer(1), DataValue::Text("Alice".to_string())]
-                ))
-            ))
-        );
+    #[test]
+    fn parse_insert_without_columns() {
+        let input = "INSERT INTO users VALUES(1,'Alice')";
+        let (remaining, stmt) = InsertStatement::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        match stmt {
+            Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
+                assert_eq!(table_name, "users");
+                assert_eq!(values, vec![
+                    DataValue::Integer(1),
+                    DataValue::Text("Alice".to_string()),
+                ]);
+            }
+            _ => panic!("Expected Insert statement"),
+        }
+    }
+
+    #[test]
+    fn parse_insert_with_escaped_quotes() {
+        let input = "INSERT INTO articles(id,title,content,language) VALUES(1,'Rust''s Guide','Learn Rust''s features','english')";
+        let (remaining, stmt) = InsertStatement::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        match stmt {
+            Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
+                assert_eq!(table_name, "articles");
+                assert_eq!(values, vec![
+                    DataValue::Integer(1),
+                    DataValue::Text("Rust's Guide".to_string()),
+                    DataValue::Text("Learn Rust's features".to_string()),
+                    DataValue::Text("english".to_string()),
+                ]);
+            }
+            _ => panic!("Expected Insert statement"),
+        }
     }
 }
