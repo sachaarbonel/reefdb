@@ -12,7 +12,7 @@ use crate::indexes::{IndexManager, DefaultIndexManager};
 #[derive(Clone)]
 pub struct InMemoryStorage {
     tables: HashMap<String, (Vec<ColumnDef>, Vec<Vec<DataValue>>)>,
-    index_manager: DefaultIndexManager<()>,
+    index_manager: DefaultIndexManager,
 }
 
 impl Storage for InMemoryStorage {
@@ -220,8 +220,8 @@ impl Storage for InMemoryStorage {
     }
 }
 
-impl IndexManager<()> for InMemoryStorage {
-    fn create_index(&mut self, table: &str, column: &str, index_type: crate::indexes::IndexType<()>) {
+impl IndexManager for InMemoryStorage {
+    fn create_index(&mut self, table: &str, column: &str, index_type: crate::indexes::IndexType) {
         self.index_manager.create_index(table, column, index_type);
     }
 
@@ -229,7 +229,7 @@ impl IndexManager<()> for InMemoryStorage {
         self.index_manager.drop_index(table, column);
     }
 
-    fn get_index(&self, table: &str, column: &str) -> Option<&crate::indexes::IndexType<()>> {
+    fn get_index(&self, table: &str, column: &str) -> Option<&crate::indexes::IndexType> {
         self.index_manager.get_index(table, column)
     }
 

@@ -83,7 +83,7 @@ impl OnDiskReefDB {
 }
 
 #[derive(Clone)]
-pub struct ReefDB<S: Storage + IndexManager<()> + Clone + Any, FTS: Search + Clone>
+pub struct ReefDB<S: Storage + IndexManager + Clone + Any, FTS: Search + Clone>
 where
     FTS::NewArgs: Clone + Default,
 {
@@ -98,7 +98,7 @@ where
     pub(crate) current_transaction_id: Option<u64>,
 }
 
-impl<S: Storage + IndexManager<()> + Clone + Any, FTS: Search + Clone> ReefDB<S, FTS>
+impl<S: Storage + IndexManager + Clone + Any, FTS: Search + Clone> ReefDB<S, FTS>
 where
     FTS::NewArgs: Clone + Default,
 {

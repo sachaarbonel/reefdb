@@ -46,7 +46,7 @@ impl DeadlockDetector {
 
     pub fn detect_deadlock<S, FTS>(&self, transactions: &[&Transaction<S, FTS>]) -> Option<u64>
     where
-        S: Storage + IndexManager<()> + Clone,
+        S: Storage + IndexManager + Clone,
         FTS: Search + Clone,
         FTS::NewArgs: Clone,
     {
@@ -99,7 +99,7 @@ impl DeadlockDetector {
 
     fn select_victim<S, FTS>(&self, cycle: &[u64], transactions: &[&Transaction<S, FTS>]) -> u64 
     where 
-        S: Storage + IndexManager<()> + Clone,
+        S: Storage + IndexManager + Clone,
         FTS: Search + Clone,
         FTS::NewArgs: Clone,
     {

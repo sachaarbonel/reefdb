@@ -1,113 +1,60 @@
-use super::btree::BTreeIndex;
-use crate::fts::search::Search;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::fmt::Debug;
-use std::collections::HashSet;
 use serde::{Serialize, Deserialize};
 use crate::fts::default::DefaultSearchIdx;
+use crate::fts::tokenizers::tokenizer::Tokenizer;
+use crate::fts::tokenizers::default::DefaultTokenizer;
+use crate::indexes::gin::GinIndex;
+use crate::indexes::btree::BTreeIndex;
+use crate::fts::search::Search;
 
-pub trait SearchIndex: Debug {
-    type NewArgs: Clone;
-    fn search(&self, table: &str, column: &str, query: &str) -> HashSet<usize>;
-    fn add_column(&mut self, table: &str, column: &str);
-    fn add_document(&mut self, table: &str, column: &str, row_id: usize, text: &str);
-    fn remove_document(&mut self, table: &str, column: &str, row_id: usize);
-    fn update_document(&mut self, table: &str, column: &str, row_id: usize, text: &str);
+#[derive(Debug, Serialize, Deserialize)]
+pub enum IndexType {
+    BTree(BTreeIndex),
+    GIN(GinIndex<DefaultTokenizer>),
 }
 
-impl<T: Search + Debug> SearchIndex for T 
-where
-    T::NewArgs: Clone
-{
-    type NewArgs = T::NewArgs;
-    fn search(&self, table: &str, column: &str, query: &str) -> HashSet<usize> {
-        T::search(self, table, column, query)
-    }
-    fn add_column(&mut self, table: &str, column: &str) {
-        T::add_column(self, table, column)
-    }
-    fn add_document(&mut self, table: &str, column: &str, row_id: usize, text: &str) {
-        T::add_document(self, table, column, row_id, text)
-    }
-    fn remove_document(&mut self, table: &str, column: &str, row_id: usize) {
-        T::remove_document(self, table, column, row_id)
-    }
-    fn update_document(&mut self, table: &str, column: &str, row_id: usize, text: &str) {
-        T::update_document(self, table, column, row_id, text)
+impl Clone for IndexType {
+    fn clone(&self) -> Self {
+        match self {
+            IndexType::BTree(btree) => IndexType::BTree(btree.clone()),
+            IndexType::GIN(gin) => IndexType::GIN(gin.clone()),
+        }
     }
 }
 
-pub trait IndexManager<T> {
-    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType<T>);
+pub trait IndexManager {
+    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType);
     fn drop_index(&mut self, table: &str, column: &str);
-    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType<T>>;
+    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType>;
     fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize);
 }
 
 #[derive(Debug)]
-pub enum IndexType<T> {
-    BTree(BTreeIndex),
-    GIN(Box<dyn SearchIndex<NewArgs = T>>),
+pub struct DefaultIndexManager {
+    indexes: HashMap<String, HashMap<String, IndexType>>,
 }
 
-impl<T> Serialize for IndexType<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            IndexType::BTree(btree) => btree.serialize(serializer),
-            IndexType::GIN(_) => unimplemented!("GIN index serialization not supported"),
-        }
-    }
-}
-
-impl<'de, T> Deserialize<'de> for IndexType<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let btree = BTreeIndex::deserialize(deserializer)?;
-        Ok(IndexType::BTree(btree))
-    }
-}
-
-impl<T> Clone for IndexType<T> {
-    fn clone(&self) -> Self {
-        match self {
-            IndexType::BTree(btree) => IndexType::BTree(btree.clone()),
-            IndexType::GIN(_) => unimplemented!("GIN index cloning not supported"),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct DefaultIndexManager<T> {
-    indexes: HashMap<String, HashMap<String, IndexType<T>>>,
-    _phantom: PhantomData<T>,
-}
-
-impl<T> Clone for DefaultIndexManager<T> {
+impl Clone for DefaultIndexManager {
     fn clone(&self) -> Self {
         DefaultIndexManager {
             indexes: self.indexes.clone(),
-            _phantom: PhantomData,
         }
     }
 }
 
-impl<T> DefaultIndexManager<T> {
-    pub fn new() -> DefaultIndexManager<T> {
+impl DefaultIndexManager {
+    pub fn new() -> DefaultIndexManager {
         DefaultIndexManager {
             indexes: HashMap::new(),
-            _phantom: PhantomData,
         }
     }
 }
 
-impl<T> IndexManager<T> for DefaultIndexManager<T> {
-    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType<T>) {
+impl IndexManager for DefaultIndexManager {
+    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType) {
         self.indexes
             .entry(table.to_string())
             .or_insert_with(HashMap::new)
@@ -120,7 +67,7 @@ impl<T> IndexManager<T> for DefaultIndexManager<T> {
         }
     }
 
-    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType<T>> {
+    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType> {
         self.indexes
             .get(table)
             .and_then(|table_indexes| table_indexes.get(column))
@@ -128,9 +75,17 @@ impl<T> IndexManager<T> for DefaultIndexManager<T> {
 
     fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize) {
         if let Some(table_indexes) = self.indexes.get_mut(table) {
-            if let Some(IndexType::BTree(index)) = table_indexes.get_mut(column) {
-                index.remove_entry(old_value, row_id);
-                index.add_entry(new_value, row_id);
+            if let Some(index) = table_indexes.get_mut(column) {
+                match index {
+                    IndexType::BTree(btree) => {
+                        btree.remove_entry(old_value, row_id);
+                        btree.add_entry(new_value, row_id);
+                    }
+                    IndexType::GIN(gin) => {
+                        // GIN indexes don't support direct value updates
+                        // They are updated through add_document/remove_document
+                    }
+                }
             }
         }
     }
@@ -139,11 +94,10 @@ impl<T> IndexManager<T> for DefaultIndexManager<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fts::default::DefaultSearchIdx;
 
     #[test]
     fn test_btree_index() {
-        let mut manager: DefaultIndexManager<()> = DefaultIndexManager::new();
+        let mut manager = DefaultIndexManager::new();
         let mut btree = BTreeIndex::new();
         
         // Add some test data
@@ -161,7 +115,7 @@ mod tests {
 
     #[test]
     fn test_index_crud() {
-        let mut manager: DefaultIndexManager<()> = DefaultIndexManager::new();
+        let mut manager = DefaultIndexManager::new();
         let btree = BTreeIndex::new();
         
         // Create
@@ -174,5 +128,31 @@ mod tests {
         // Drop
         manager.drop_index("users", "age");
         assert!(manager.get_index("users", "age").is_none());
+    }
+
+    #[test]
+    fn test_gin_index_serialization() {
+        let mut gin = GinIndex::<DefaultTokenizer>::new();
+        gin.add_column("users", "bio");
+        gin.add_document("users", "bio", 1, "Hello world");
+        gin.add_document("users", "bio", 2, "Goodbye world");
+
+        let index_type = IndexType::GIN(gin);
+        
+        // Serialize
+        let serialized = bincode::serialize(&index_type).unwrap();
+        
+        // Deserialize
+        let deserialized: IndexType = bincode::deserialize(&serialized).unwrap();
+        
+        // Verify
+        if let IndexType::GIN(gin) = deserialized {
+            let results = gin.search("users", "bio", "world");
+            assert_eq!(results.len(), 2);
+            assert!(results.contains(&1));
+            assert!(results.contains(&2));
+        } else {
+            panic!("Expected GIN index");
+        }
     }
 } 

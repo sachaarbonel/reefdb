@@ -6,12 +6,12 @@ use std::collections::HashMap;
 use super::index_manager::{IndexType, IndexManager};
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct OnDiskIndexManager<T> {
+pub struct OnDiskIndexManager {
     file_path: String,
-    indexes: HashMap<String, HashMap<String, IndexType<T>>>,
+    indexes: HashMap<String, HashMap<String, IndexType>>,
 }
 
-impl<T: Clone> Clone for OnDiskIndexManager<T> {
+impl Clone for OnDiskIndexManager {
     fn clone(&self) -> Self {
         OnDiskIndexManager {
             file_path: self.file_path.clone(),
@@ -20,7 +20,7 @@ impl<T: Clone> Clone for OnDiskIndexManager<T> {
     }
 }
 
-impl<T: Clone> OnDiskIndexManager<T> {
+impl OnDiskIndexManager {
     pub fn new(file_path: String) -> Self {
         let path = Path::new(&file_path);
         let mut indexes = HashMap::new();
@@ -58,8 +58,8 @@ impl<T: Clone> OnDiskIndexManager<T> {
     }
 }
 
-impl<T: Clone> super::index_manager::IndexManager<T> for OnDiskIndexManager<T> {
-    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType<T>) {
+impl IndexManager for OnDiskIndexManager {
+    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType) {
         self.indexes
             .entry(table.to_string())
             .or_insert_with(HashMap::new)
@@ -74,7 +74,7 @@ impl<T: Clone> super::index_manager::IndexManager<T> for OnDiskIndexManager<T> {
         }
     }
 
-    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType<T>> {
+    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType> {
         self.indexes
             .get(table)
             .and_then(|table_indexes| table_indexes.get(column))
@@ -82,10 +82,18 @@ impl<T: Clone> super::index_manager::IndexManager<T> for OnDiskIndexManager<T> {
 
     fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize) {
         if let Some(table_indexes) = self.indexes.get_mut(table) {
-            if let Some(IndexType::BTree(index)) = table_indexes.get_mut(column) {
-                index.remove_entry(old_value, row_id);
-                index.add_entry(new_value, row_id);
-                self.save().unwrap();
+            if let Some(index) = table_indexes.get_mut(column) {
+                match index {
+                    IndexType::BTree(btree) => {
+                        btree.remove_entry(old_value, row_id);
+                        btree.add_entry(new_value, row_id);
+                        self.save().unwrap();
+                    }
+                    IndexType::GIN(gin) => {
+                        // GIN indexes don't support direct value updates
+                        // They are updated through add_document/remove_document
+                    }
+                }
             }
         }
     }
@@ -104,7 +112,7 @@ mod tests {
         
         // Create and populate index manager
         {
-            let mut manager: OnDiskIndexManager<()> = OnDiskIndexManager::new(file_path.clone());
+            let mut manager = OnDiskIndexManager::new(file_path.clone());
             let mut btree = BTreeIndex::new();
             btree.add_entry(vec![1, 2, 3], 1);
             btree.add_entry(vec![4, 5, 6], 2);
@@ -114,7 +122,7 @@ mod tests {
 
         // Create new manager instance and verify persistence
         {
-            let manager: OnDiskIndexManager<()> = OnDiskIndexManager::new(file_path);
+            let manager = OnDiskIndexManager::new(file_path);
             if let Some(IndexType::BTree(index)) = manager.get_index("users", "age") {
                 assert!(index.search(vec![1, 2, 3]).unwrap().contains(&1));
                 assert!(index.search(vec![4, 5, 6]).unwrap().contains(&2));

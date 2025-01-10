@@ -56,7 +56,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct TransactionManager<S: Storage + IndexManager<()> + Clone + Any, FTS: Search + Clone>
+pub struct TransactionManager<S: Storage + IndexManager + Clone + Any, FTS: Search + Clone>
 where
     FTS::NewArgs: Clone,
 {
@@ -72,7 +72,7 @@ where
 // Helper structs
 struct TransactionGuard<'a, S, FTS>
 where
-    S: Storage + IndexManager<()> + Clone + Any,
+    S: Storage + IndexManager + Clone + Any,
     FTS: Search + Clone,
     FTS::NewArgs: Clone,
 {
@@ -80,7 +80,7 @@ where
     isolation_level: IsolationLevel,
 }
 
-impl<S: Storage + IndexManager<()> + Clone + Any, FTS: Search + Clone> TransactionManager<S, FTS>
+impl<S: Storage + IndexManager + Clone + Any, FTS: Search + Clone> TransactionManager<S, FTS>
 where
     FTS::NewArgs: Clone,
 {

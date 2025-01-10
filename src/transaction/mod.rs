@@ -29,7 +29,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct Transaction<S: Storage + IndexManager<()> + Clone, FTS: Search + Clone>
+pub struct Transaction<S: Storage + IndexManager + Clone, FTS: Search + Clone>
 where
     FTS::NewArgs: Clone,
 {
@@ -39,7 +39,7 @@ where
     pub(crate) acid_manager: AcidManager,
 }
 
-impl<S: Storage + IndexManager<()> + Clone, FTS: Search + Clone> Transaction<S, FTS>
+impl<S: Storage + IndexManager + Clone, FTS: Search + Clone> Transaction<S, FTS>
 where
     FTS::NewArgs: Clone,
 {

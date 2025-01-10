@@ -17,7 +17,7 @@ use crate::indexes::{IndexManager, IndexType, disk::OnDiskIndexManager};
 pub struct OnDiskStorage {
     file_path: String,
     tables: HashMap<String, (Vec<ColumnDef>, Vec<Vec<DataValue>>)>,
-    index_manager: OnDiskIndexManager<()>,
+    index_manager: OnDiskIndexManager,
 }
 
 impl OnDiskStorage {
@@ -301,8 +301,8 @@ impl Storage for OnDiskStorage {
     }
 }
 
-impl IndexManager<()> for OnDiskStorage {
-    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType<()>) {
+impl IndexManager for OnDiskStorage {
+    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType) {
         self.index_manager.create_index(table, column, index_type);
     }
 
@@ -310,7 +310,7 @@ impl IndexManager<()> for OnDiskStorage {
         self.index_manager.drop_index(table, column);
     }
 
-    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType<()>> {
+    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType> {
         self.index_manager.get_index(table, column)
     }
 
