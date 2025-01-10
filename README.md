@@ -4,25 +4,11 @@
 
 ReefDB is a minimalistic, in-memory and on-disk database management system written in Rust, implementing basic SQL query capabilities and full-text search.
 
-## Features
-
-- In-Memory or On-Disk storage options
-- Basic SQL statements (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE)
-- INNER JOIN support
-- Full-Text Search using Inverted Index
-- Custom data types (INTEGER, TEXT, FTS_TEXT)
-
-## Dependencies
-
-- [nom](https://github.com/Geal/nom) for SQL parsing
-- [serde](https://github.com/serde-rs/serde) for serialization
-- [bincode](https://github.com/bincode-org/bincode) for encoding
-
 ## Usage
 
 To use ReefDB, you can choose between an in-memory storage (`InMemoryReefDB`) or on-disk storage (`OnDiskReefDB`). 
 
-### In-Memory ReefDB Example
+### Basic Example
 
 ```rust
 use reefdb::InMemoryReefDB;
@@ -30,139 +16,35 @@ use reefdb::InMemoryReefDB;
 fn main() {
     let mut db = InMemoryReefDB::new();
 
-    let queries = vec![
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "INSERT INTO users VALUES (1, 'Alice')",
-        "INSERT INTO users VALUES (2, 'Bob')",
-        "SELECT * FROM users WHERE id = 1",
-    ];
-
-    for query in queries {
-        let result = db.query(query);
-        println!("Result: {:?}", result);
-    }
+    // Basic SQL operations
+    db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
+    db.query("INSERT INTO users VALUES (1, 'Alice')");
+    db.query("SELECT * FROM users WHERE id = 1");
+    
+    // Full-text search
+    db.query("CREATE TABLE books (title TEXT, description FTS_TEXT)");
+    db.query("INSERT INTO books VALUES ('Book 1', 'A book about computer science')");
+    db.query("SELECT title FROM books WHERE description MATCH 'computer'");
+    
+    // Joins
+    db.query("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)");
+    db.query("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER)");
+    db.query("SELECT authors.name, books.title FROM authors INNER JOIN books ON authors.id = books.author_id");
 }
 ```
 
-### On-Disk ReefDB Example
+### On-Disk Storage
 
 ```rust
 use reefdb::OnDiskReefDB;
 
 fn main() {
-    let kv_path = "kv.db";
-    let index = "index.bin";
-    let mut db = OnDiskReefDB::new(kv_path.to_string(), index.to_string());
-
-    let queries = vec![
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "INSERT INTO users VALUES (1, 'Alice')",
-        "INSERT INTO users VALUES (2, 'Bob')",
-        "SELECT * FROM users WHERE id = 1",
-    ];
-
-    for query in queries {
-        let result = db.query(query);
-        println!("Result: {:?}", result);
-    }
+    let mut db = OnDiskReefDB::new("db.reef".to_string(), "index.bin".to_string());
+    // Use the same SQL queries as with InMemoryReefDB
 }
 ```
 
-### Full-Text Search Example
-
-```rust
-use reefdb::InMemoryReefDB;
-
-fn main() {
-    let mut db = InMemoryReefDB::new();
-
-    let queries = vec![
-        "CREATE TABLE books (title TEXT, author TEXT, description FTS_TEXT)",
-        "INSERT INTO books VALUES ('Book 1', 'Author 1', 'A book about the history of computer science.')",
-        "INSERT INTO books VALUES ('Book 2', 'Author 2', 'A book about modern programming languages.')",
-        "INSERT INTO books VALUES ('Book 3', 'Author 3', 'A book about the future of artificial intelligence.')",
-        "SELECT title, author FROM books WHERE description MATCH 'computer science'",
-    ];
-
-    for query in queries {
-        let result = db.query(query);
-        println!("Result: {:?}", result);
-    }
-}
-```
-
-### DELETE Example
-
-```rust
-use reefdb::InMemoryReefDB;
-
-fn main() {
-    let mut db = InMemoryReefDB::new();
-
-    let queries = vec![
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "INSERT INTO users VALUES (1, 'Alice')",
-        "INSERT INTO users VALUES (2, 'Bob')",
-        "DELETE FROM users WHERE id = 1",
-        "SELECT * FROM users",
-    ];
-
-    for query in queries {
-        let result = db.query(query);
-        println!("Result: {:?}", result);
-    }
-}
-```
-
-### UPDATE Example
-
-```rust
-use reefdb::InMemoryReefDB;
-
-fn main() {
-    let mut db = InMemoryReefDB::new();
-
-    let queries = vec![
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-        "INSERT INTO users VALUES (1, 'Alice')",
-        "INSERT INTO users VALUES (2, 'Bob')",
-        "UPDATE users SET name = 'Charlie' WHERE id = 1",
-        "SELECT * FROM users",
-    ];
-
-    for query in queries {
-        let result = db.query(query);
-        println!("Result: {:?}", result);
-    }
-}
-```
-
-### INNER JOIN Example
-
-```rust
-use reefdb::InMemoryReefDB;
-
-fn main() {
-    let mut db = InMemoryReefDB::new();
-
-    let queries = vec![
-        "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)",
-        "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER)",
-        "INSERT INTO authors VALUES (1, 'Alice')",
-        "INSERT INTO authors VALUES (2, 'Bob')",
-        "INSERT INTO books VALUES (1, 'Book 1', 1)",
-        "INSERT INTO books VALUES (2, 'Book 2', 2)",
-        "SELECT authors.name, books.title FROM authors INNER JOIN books ON authors.id = books.author_id",
-    ];
-
-    for query in queries {
-        let result = db.query(query);
-        println!("Result: {:?}", result);
-    }
-}
-```
-
-## Completed Features
+## Features
 
 ### Core Database Features
 - ✅ In-Memory and On-Disk storage modes
@@ -189,101 +71,56 @@ fn main() {
 - ✅ Deadlock detection
 - ✅ MVCC implementation
 
-### Transaction Example
-
-```rust
-use reefdb::{OnDiskReefDB, transaction::IsolationLevel};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut db = OnDiskReefDB::create_on_disk("db.reef".to_string(), "index.bin".to_string())?;
-
-    // Begin a transaction with Serializable isolation level
-    let tx_id = db.begin_transaction(IsolationLevel::Serializable)?;
-
-    // Execute statements within the transaction
-    let queries = vec![
-        "CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance INTEGER)",
-        "INSERT INTO accounts VALUES (1, 1000)",
-        "INSERT INTO accounts VALUES (2, 500)",
-        "UPDATE accounts SET balance = balance - 100 WHERE id = 1",
-        "UPDATE accounts SET balance = balance + 100 WHERE id = 2",
-    ];
-
-    for query in queries {
-        match db.query(query) {
-            Ok(_) => continue,
-            Err(e) => {
-                // Rollback on error
-                db.rollback_transaction(tx_id)?;
-                return Err(Box::new(e));
-            }
-        }
-    }
-
-    // Commit the transaction
-    db.commit_transaction(tx_id)?;
-    Ok(())
-}
-```
-
-### MVCC Example
-
-```rust
-use reefdb::{OnDiskReefDB, transaction::IsolationLevel};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut db = OnDiskReefDB::create_on_disk("db.reef".to_string(), "index.bin".to_string())?;
-
-    // Start two concurrent transactions
-    let tx1_id = db.begin_transaction(IsolationLevel::Serializable)?;
-    let tx2_id = db.begin_transaction(IsolationLevel::Serializable)?;
-
-    // Each transaction sees its own version of the data
-    db.query("CREATE TABLE test (id INTEGER, value TEXT)")?;
-    db.query("INSERT INTO test VALUES (1, 'initial')")?;
-
-    // Transaction 1 updates the value
-    db.query("UPDATE test SET value = 'tx1_update' WHERE id = 1")?;
-
-    // Transaction 2 still sees the original value
-    let result = db.query("SELECT value FROM test WHERE id = 1")?;
-    assert_eq!(result.to_string(), "initial");
-
-    // Commit both transactions
-    db.commit_transaction(tx1_id)?;
-    db.commit_transaction(tx2_id)?;
-    Ok(())
-}
-```
-
 ### Indexing
 - ✅ B-Tree index implementation
 - ✅ CREATE INDEX and DROP INDEX support
 - ✅ Index persistence for on-disk storage
 - ✅ Basic query optimization with indexes
 
-## Future Improvements (TODOs)
+## Dependencies
+
+- [nom](https://github.com/Geal/nom) for SQL parsing
+- [serde](https://github.com/serde-rs/serde) for serialization
+- [bincode](https://github.com/bincode-org/bincode) for encoding
+
+## Future Improvements
+
+### Critical for Production (Highest Priority)
+
+#### Real-time Index Management
+- [ ] Real-time index updates with ACID compliance
+- [ ] Index consistency verification
+- [ ] Atomic index operations
+- [ ] Index recovery mechanisms
+- [ ] Concurrent index access
+
+#### Query Processing Essentials
+- [ ] Basic aggregate functions (COUNT, SUM)
+- [ ] ORDER BY implementation
+- [ ] LIMIT and OFFSET support
+- [ ] LEFT JOIN support
+- [ ] Query timeout mechanism
+
+#### Core Performance Features
+- [ ] Memory-mapped storage
+  - [ ] Page-level operations
+  - [ ] Buffer management
+  - [ ] Memory-mapped file handling
+  - [ ] Crash recovery
+- [ ] Basic query optimization
+  - [ ] Statistics-based planning
+  - [ ] Index usage optimization
+  - [ ] Join order optimization
+- [ ] Index compression
+- [ ] Parallel query execution
+
+#### Monitoring & Diagnostics Essentials
+- [ ] Basic query metrics
+- [ ] Index usage statistics
+- [ ] Transaction monitoring
+- [ ] Error logging and tracing
 
 ### High Priority
-
-#### Query Processing
-- [ ] Additional JOIN types:
-  - [ ] LEFT JOIN
-  - [ ] RIGHT JOIN
-  - [ ] OUTER JOIN
-  - [ ] CROSS JOIN
-  - [ ] FULL JOIN
-- [ ] Aggregate functions (SUM, COUNT, AVG, MIN, MAX)
-- [ ] GROUP BY and HAVING clauses
-- [ ] ORDER BY clauses
-- [ ] LIMIT and OFFSET support
-
-#### Transaction Enhancements
-- [x] Full ACID compliance
-- [ ] Autocommit mode
-- [ ] SAVEPOINT support
-- [x] Deadlock detection
-- [x] MVCC implementation
 
 #### Index Improvements
 - [ ] Multi-column indexes
@@ -291,16 +128,116 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - [ ] Bitmap indexes for low-cardinality columns
 - [ ] Cost-based optimizer
 - [ ] Query plan visualization
+- [ ] Incremental indexing
 
-### Medium Priority
+#### Additional JOIN Support
+- [ ] RIGHT JOIN
+- [ ] OUTER JOIN
+- [ ] CROSS JOIN
+- [ ] FULL JOIN
+- [ ] NATURAL JOIN
+- [ ] SELF JOIN
+
+#### Advanced Query Processing
+- [ ] Additional aggregate functions (AVG, MIN, MAX)
+- [ ] GROUP BY and HAVING clauses
+
+#### Monitoring & Diagnostics
+- [ ] Index statistics
+- [ ] Query explanation
+- [ ] Performance metrics
+- [ ] Index health checks
+- [ ] Query profiling
 
 #### Full-text Search Enhancements
-- [ ] Stemming support
-- [ ] Advanced tokenization options
-- [ ] Relevance scoring
-- [ ] Phrase searching
-- [ ] Fuzzy matching
-- [ ] Synonym support
+- [ ] Advanced Index Types
+  - [ ] BM25 scoring with configurable parameters
+  - [ ] TF-IDF with normalization options
+  - [ ] Custom scoring functions
+  - [ ] Position-aware indexing
+  - [ ] Field norms support
+
+- [ ] Query Features
+  - [ ] Fuzzy matching with configurable distance
+  - [ ] Regular expression support
+  - [ ] Range queries
+  - [ ] Boolean queries with minimum match
+  - [ ] Phrase queries with slop
+  - [ ] Query rewriting and optimization
+  - [ ] Query expansion
+
+#### Vector Search Capabilities
+- [ ] Vector Data Types and Operations
+  - [ ] VECTOR(dimensions) data type
+  - [ ] Vector similarity operators (<->, <=>, <#>)
+  - [ ] Configurable distance metrics (L2, Cosine, Dot Product)
+  - [ ] Vector normalization options
+
+- [ ] Dimension-Optimized Indexes
+  - [ ] KD-Tree for low dimensions (≤ 8)
+  - [ ] HNSW for medium dimensions (≤ 100)
+  - [ ] Brute Force with SIMD for high dimensions
+  - [ ] Index selection based on dimensionality
+
+- [ ] Advanced Vector Search Features
+  - [ ] Approximate Nearest Neighbors (ANN)
+  - [ ] Hybrid search (combine with text/filters)
+  - [ ] Batch vector operations
+  - [ ] Vector quantization
+  - [ ] Dynamic index rebuilding
+  - [ ] Multi-vector queries
+
+- [ ] Vector Search Optimizations
+  - [ ] SIMD acceleration
+  - [ ] Parallel search
+  - [ ] Memory-mapped vectors
+  - [ ] Vector compression
+  - [ ] Incremental index updates
+  - [ ] Cache-friendly layouts
+
+#### Advanced Text Processing
+- [ ] Multiple analyzer support
+- [ ] Custom token filters
+- [ ] Token position tracking
+- [ ] SIMD-accelerated processing
+- [ ] Phonetic matching
+- [ ] Configurable tokenization pipelines
+
+- [ ] CJK (Chinese, Japanese, Korean) Support
+  - [ ] Character-based tokenization
+  - [ ] N-gram tokenization
+  - [ ] Dictionary-based word segmentation
+  - [ ] Language-specific stop words
+  - [ ] Unicode normalization
+  - [ ] Ideograph handling
+  - [ ] Reading/pronunciation support
+    - [ ] Pinyin for Chinese
+    - [ ] Hiragana/Katakana for Japanese
+    - [ ] Hangul/Hanja for Korean
+  - [ ] Mixed script handling
+  - [ ] CJK-specific scoring adjustments
+  - [ ] Compound word processing
+  - [ ] Character variant normalization
+
+- [ ] Faceted Search
+  - [ ] Hierarchical facets
+  - [ ] Dynamic facet counting
+  - [ ] Custom facet ordering
+  - [ ] Multi-value facets
+
+- [ ] Enhanced Scoring & Ranking
+  - [ ] Configurable scoring algorithms
+  - [ ] Score explanation
+  - [ ] Custom boosting factors
+  - [ ] Field-weight customization
+  - [ ] Position-based scoring
+
+- [ ] Search Quality
+  - [ ] Highlighting with snippets
+  - [ ] Relevance tuning tools
+  - [ ] Search quality metrics
+
+### Medium Priority
 
 #### Constraint System
 - [ ] UNIQUE constraints
@@ -360,56 +297,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for more information.
-
-### ACID Compliance
-
-ReefDB now provides full ACID (Atomicity, Consistency, Isolation, Durability) compliance:
-
-- **Atomicity**: Transactions are all-or-nothing. If any part fails, the entire transaction is rolled back.
-- **Consistency**: The database moves from one valid state to another, maintaining all constraints.
-- **Isolation**: Concurrent transactions don't interfere with each other, using MVCC and proper locking.
-- **Durability**: Committed transactions are persisted to disk using Write-Ahead Logging.
-
-### Deadlock Detection
-
-ReefDB implements deadlock detection using a wait-for graph algorithm:
-
-- Automatically detects circular wait conditions between transactions
-- Selects appropriate victim transactions to break deadlocks
-- Provides graceful recovery by rolling back affected transactions
-- Integrates with the transaction manager for seamless handling
-
-### Deadlock Example
-
-```rust
-use reefdb::{OnDiskReefDB, transaction::IsolationLevel};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut db = OnDiskReefDB::create_on_disk("db.reef".to_string(), "index.bin".to_string())?;
-
-    // Start two concurrent transactions
-    let tx1_id = db.begin_transaction(IsolationLevel::Serializable)?;
-    let tx2_id = db.begin_transaction(IsolationLevel::Serializable)?;
-
-    // Transaction 1 updates table1
-    db.query("UPDATE table1 SET value = 'new' WHERE id = 1")?;
-
-    // Transaction 2 updates table2
-    db.query("UPDATE table2 SET value = 'new' WHERE id = 1")?;
-
-    // Potential deadlock: T1 tries to access T2's resource and vice versa
-    match db.query("UPDATE table2 SET value = 'new2' WHERE id = 2") {
-        Ok(_) => (),
-        Err(e) => {
-            // Handle deadlock error
-            if e.to_string().contains("deadlock") {
-                db.rollback_transaction(tx1_id)?;
-            }
-        }
-    }
-
-    // Clean up
-    db.commit_transaction(tx2_id)?;
-    Ok(())
-}
-```

@@ -8,3 +8,4 @@ pub mod statements;
 pub mod column;
 pub mod operators;
 pub mod table;
+pub mod parser;

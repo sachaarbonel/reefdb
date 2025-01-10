@@ -36,11 +36,23 @@ pub enum Statement {
     Savepoint(SavepointStatement),
     RollbackToSavepoint(String),
     ReleaseSavepoint(String),
+    BeginTransaction,
+    Commit,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct SavepointStatement {
     pub name: String,
+}
+
+fn parse_begin_transaction(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = tag_no_case("BEGIN TRANSACTION")(input)?;
+    Ok((input, Statement::BeginTransaction))
+}
+
+fn parse_commit(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = tag_no_case("COMMIT")(input)?;
+    Ok((input, Statement::Commit))
 }
 
 fn parse_savepoint(input: &str) -> IResult<&str, Statement> {
@@ -81,6 +93,8 @@ impl Statement {
                 parse_savepoint,
                 parse_rollback_to_savepoint,
                 parse_release_savepoint,
+                parse_begin_transaction,
+                parse_commit,
             )),
         )(input)
     }

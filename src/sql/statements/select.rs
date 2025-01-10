@@ -1,10 +1,11 @@
 use crate::sql::{
     clauses::{
         join_clause::JoinClause,
-        wheres::where_type::WhereType,
+        wheres::where_type::{WhereType, parse_where_clause},
     },
     column::Column,
     column_value_pair::identifier,
+    statements::Statement,
 };
 
 use nom::{
@@ -16,8 +17,6 @@ use nom::{
     branch::alt,
     IResult,
 };
-
-use crate::Statement;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum SelectStatement {
@@ -35,9 +34,10 @@ impl SelectStatement {
         let (input, table_name) = identifier(input)?;
 
         let (input, _) = opt(multispace1)(input)?;
-        let (input, where_clause) = opt(WhereType::parse)(input)?;
-
         let (input, joins) = many0(JoinClause::parse)(input)?;
+
+        let (input, _) = opt(multispace1)(input)?;
+        let (input, where_clause) = opt(parse_where_clause)(input)?;
 
         Ok((
             input,
@@ -48,6 +48,18 @@ impl SelectStatement {
                 joins,
             )),
         ))
+    }
+
+    pub fn get_tables(&self) -> Vec<&str> {
+        match self {
+            SelectStatement::FromTable(table_name, _, _, joins) => {
+                let mut tables = vec![table_name.as_str()];
+                for join in joins {
+                    tables.push(&join.table_name);
+                }
+                tables
+            }
+        }
     }
 }
 
@@ -93,8 +105,8 @@ mod tests {
         clauses::join_clause::JoinType,
         column_value_pair::ColumnValuePair,
         column::Column,
+        statements::Statement,
     };
-    use crate::Statement;
 
     #[test]
     fn parse_select_test() {

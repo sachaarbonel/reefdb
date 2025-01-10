@@ -11,6 +11,15 @@ pub struct OnDiskIndexManager<T> {
     indexes: HashMap<String, HashMap<String, IndexType<T>>>,
 }
 
+impl<T: Clone> Clone for OnDiskIndexManager<T> {
+    fn clone(&self) -> Self {
+        OnDiskIndexManager {
+            file_path: self.file_path.clone(),
+            indexes: self.indexes.clone(),
+        }
+    }
+}
+
 impl<T: Clone> OnDiskIndexManager<T> {
     pub fn new(file_path: String) -> Self {
         let path = Path::new(&file_path);

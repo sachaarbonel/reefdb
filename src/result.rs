@@ -14,4 +14,6 @@ pub enum ReefDBResult {
     Savepoint,
     RollbackToSavepoint,
     ReleaseSavepoint,
+    BeginTransaction,
+    Commit,
 }

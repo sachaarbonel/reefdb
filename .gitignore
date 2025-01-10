@@ -1,5 +1,6 @@
 /target
 /Cargo.lock
 test_db
-reef.wal
+*.wal
 .sync
+*.db

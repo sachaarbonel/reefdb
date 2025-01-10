@@ -2,8 +2,9 @@ use crate::sql::column_def::ColumnDef;
 use nom::{
     bytes::complete::tag,
     character::complete::{alphanumeric1, multispace0, multispace1},
-    multi::separated_list0,
-    sequence::{delimited, terminated},
+    multi::separated_list1,
+    sequence::{delimited, tuple, terminated},
+    combinator::opt,
     IResult,
 };
 
@@ -19,11 +20,14 @@ impl CreateStatement {
         let (input, _) = tag("CREATE TABLE")(input)?;
         let (input, _) = multispace1(input)?;
         let (input, table_name) = alphanumeric1(input)?;
-        let (input, _) = multispace1(input)?;
+        let (input, _) = multispace0(input)?;
         let (input, columns) = delimited(
             tag("("),
-            separated_list0(terminated(tag(","), multispace0), ColumnDef::parse),
-            tag(")"),
+            separated_list1(
+                tuple((multispace0, tag(","), multispace0)),
+                ColumnDef::parse
+            ),
+            tuple((multispace0, opt(tuple((tag(","), multispace0))), tag(")"))),
         )(input)?;
 
         Ok((

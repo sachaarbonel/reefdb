@@ -42,4 +42,68 @@ impl BTreeIndex {
         }
         results
     }
-} 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new() {
+        let index = BTreeIndex::new();
+        assert!(index.index.is_empty());
+    }
+
+    #[test]
+    fn test_add_entry() {
+        let mut index = BTreeIndex::new();
+        index.add_entry(vec![1, 2, 3], 1);
+        
+        assert_eq!(index.index.len(), 1);
+        assert!(index.index.contains_key(&vec![1, 2, 3]));
+        assert_eq!(index.index.get(&vec![1, 2, 3]).unwrap().len(), 1);
+        assert!(index.index.get(&vec![1, 2, 3]).unwrap().contains(&1));
+    }
+
+    #[test]
+    fn test_remove_entry() {
+        let mut index = BTreeIndex::new();
+        index.add_entry(vec![1, 2, 3], 1);
+        index.add_entry(vec![1, 2, 3], 2);
+        
+        index.remove_entry(vec![1, 2, 3], 1);
+        assert_eq!(index.index.get(&vec![1, 2, 3]).unwrap().len(), 1);
+        assert!(index.index.get(&vec![1, 2, 3]).unwrap().contains(&2));
+        
+        index.remove_entry(vec![1, 2, 3], 2);
+        assert!(!index.index.contains_key(&vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn test_search() {
+        let mut index = BTreeIndex::new();
+        index.add_entry(vec![1, 2, 3], 1);
+        index.add_entry(vec![1, 2, 3], 2);
+        
+        let result = index.search(vec![1, 2, 3]);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().len(), 2);
+        assert!(result.unwrap().contains(&1));
+        assert!(result.unwrap().contains(&2));
+        
+        assert!(index.search(vec![4, 5, 6]).is_none());
+    }
+
+    #[test]
+    fn test_range_search() {
+        let mut index = BTreeIndex::new();
+        index.add_entry(vec![1], 1);
+        index.add_entry(vec![2], 2);
+        index.add_entry(vec![3], 3);
+        
+        let result = index.range_search(vec![1], vec![2]);
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&1));
+        assert!(result.contains(&2));
+    }
+}

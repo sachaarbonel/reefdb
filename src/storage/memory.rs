@@ -4,10 +4,15 @@ use std::any::Any;
 
 use super::Storage;
 use crate::sql::data_value::DataValue;
+use crate::sql::data_type::DataType;
+use crate::error::ReefDBError;
+use crate::sql::constraints::constraint::Constraint;
+use crate::indexes::{IndexManager, DefaultIndexManager};
 
 #[derive(Clone)]
 pub struct InMemoryStorage {
     tables: HashMap<String, (Vec<ColumnDef>, Vec<Vec<DataValue>>)>,
+    index_manager: DefaultIndexManager<()>,
 }
 
 impl Storage for InMemoryStorage {
@@ -15,6 +20,7 @@ impl Storage for InMemoryStorage {
     fn new(_args: ()) -> Self {
         InMemoryStorage {
             tables: HashMap::new(),
+            index_manager: DefaultIndexManager::new(),
         }
     }
 
@@ -38,16 +44,55 @@ impl Storage for InMemoryStorage {
         self.tables.contains_key(table_name)
     }
 
-    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) -> usize {
-        if let Some((_, rows)) = self.get_table(table_name) {
+    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) -> Result<usize, ReefDBError> {
+        if let Some((columns, rows)) = self.get_table(table_name) {
+            // Validate constraints
+            for (i, (column, value)) in columns.iter().zip(row.iter()).enumerate() {
+                // Check UNIQUE constraint
+                if column.constraints.contains(&Constraint::Unique) {
+                    for existing_row in rows.iter() {
+                        if existing_row[i] == *value {
+                            return Err(ReefDBError::Other(format!(
+                                "Unique constraint violation for column {} with value {:?}",
+                                column.name, value
+                            )));
+                        }
+                    }
+                }
+                
+                // Check NOT NULL constraint
+                if column.constraints.contains(&Constraint::NotNull) {
+                    if let DataValue::Text(text) = value {
+                        if text.is_empty() {
+                            return Err(ReefDBError::Other(format!(
+                                "NOT NULL constraint violation for column {}",
+                                column.name
+                            )));
+                        }
+                    }
+                }
+                
+                // Check PRIMARY KEY constraint
+                if column.constraints.contains(&Constraint::PrimaryKey) {
+                    for existing_row in rows.iter() {
+                        if existing_row[i] == *value {
+                            return Err(ReefDBError::Other(format!(
+                                "Primary key violation for column {} with value {:?}",
+                                column.name, value
+                            )));
+                        }
+                    }
+                }
+            }
+
             // Add the new row to the table
             rows.push(row);
 
             // Return the rowid (1-based index)
-            rows.len()
+            Ok(rows.len())
         } else {
-            // Return an error value if the table doesn't exist
-            0
+            // Return an error if the table doesn't exist
+            Err(ReefDBError::TableNotFound(table_name.to_string()))
         }
     }
 
@@ -58,9 +103,9 @@ impl Storage for InMemoryStorage {
         where_clause: Option<(String, DataValue)>,
     ) -> usize {
         let (schema, rows) = self.get_table(table_name).unwrap();
-        let mut last_updated_row_id = 0;
+        let mut updated_count = 0;
 
-        for (idx, row) in rows.iter_mut().enumerate() {
+        for row in rows.iter_mut() {
             let matches_where = if let Some((column, value)) = &where_clause {
                 let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
                 row[column_idx] == *value
@@ -69,14 +114,16 @@ impl Storage for InMemoryStorage {
             };
 
             if matches_where {
-                for (column, value) in &updates {
-                    let column_idx = schema.iter().position(|c| c.name == *column).unwrap();
-                    row[column_idx] = value.clone();
+                for (col_name, new_value) in &updates {
+                    if let Some(col_idx) = schema.iter().position(|c| c.name == *col_name) {
+                        row[col_idx] = new_value.clone();
+                    }
                 }
-                last_updated_row_id = idx + 1; // Convert to 1-based index
+                updated_count += 1;
             }
         }
-        last_updated_row_id
+
+        updated_count
     }
 
     fn delete_table(
@@ -109,8 +156,85 @@ impl Storage for InMemoryStorage {
         self.tables.remove(table_name).is_some()
     }
 
+    fn add_column(&mut self, table_name: &str, column_def: ColumnDef) -> Result<(), ReefDBError> {
+        if let Some((schema, data)) = self.tables.get_mut(table_name) {
+            schema.push(column_def.clone());
+            // Add default value for the new column in all existing rows
+            let default_value = match column_def.data_type {
+                DataType::Text | DataType::FTSText => DataValue::Text(String::new()),
+                DataType::Integer => DataValue::Integer(0),
+            };
+            for row in data.iter_mut() {
+                row.push(default_value.clone());
+            }
+            Ok(())
+        } else {
+            Err(ReefDBError::TableNotFound(table_name.to_string()))
+        }
+    }
+
+    fn drop_column(&mut self, table_name: &str, column_name: &str) -> Result<(), ReefDBError> {
+        if let Some((schema, data)) = self.tables.get_mut(table_name) {
+            if let Some(idx) = schema.iter().position(|col| col.name == column_name) {
+                schema.remove(idx);
+                // Remove the column data from all rows
+                for row in data.iter_mut() {
+                    row.remove(idx);
+                }
+                Ok(())
+            } else {
+                Err(ReefDBError::ColumnNotFound(column_name.to_string()))
+            }
+        } else {
+            Err(ReefDBError::TableNotFound(table_name.to_string()))
+        }
+    }
+
+    fn rename_column(&mut self, table_name: &str, old_name: &str, new_name: &str) -> Result<(), ReefDBError> {
+        if let Some((schema, _)) = self.tables.get_mut(table_name) {
+            if let Some(col) = schema.iter_mut().find(|col| col.name == old_name) {
+                col.name = new_name.to_string();
+                Ok(())
+            } else {
+                Err(ReefDBError::ColumnNotFound(old_name.to_string()))
+            }
+        } else {
+            Err(ReefDBError::TableNotFound(table_name.to_string()))
+        }
+    }
+
+    fn drop_table(&mut self, table_name: &str) {
+        self.tables.remove(table_name);
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
+    }
+
+    fn clear(&mut self) {
+        self.tables.clear();
+    }
+
+    fn get_all_tables(&self) -> &HashMap<String, (Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
+        &self.tables
+    }
+}
+
+impl IndexManager<()> for InMemoryStorage {
+    fn create_index(&mut self, table: &str, column: &str, index_type: crate::indexes::IndexType<()>) {
+        self.index_manager.create_index(table, column, index_type);
+    }
+
+    fn drop_index(&mut self, table: &str, column: &str) {
+        self.index_manager.drop_index(table, column);
+    }
+
+    fn get_index(&self, table: &str, column: &str) -> Option<&crate::indexes::IndexType<()>> {
+        self.index_manager.get_index(table, column)
+    }
+
+    fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize) {
+        self.index_manager.update_index(table, column, old_value, new_value, row_id);
     }
 }
 

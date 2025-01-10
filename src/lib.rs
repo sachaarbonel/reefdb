@@ -1,967 +1,693 @@
-use error::ReefDBError;
-use indexes::fts::memory::InvertedIndex;
-use indexes::fts::tokenizers::default::DefaultTokenizer;
-use indexes::fts::disk::OnDiskInvertedIndex;
-use indexes::fts::search::Search;
-use result::ReefDBResult;
-use sql::{
-    clauses::wheres::where_type::WhereType,
-    data_value::DataValue,
+use crate::storage::memory::InMemoryStorage;
+use crate::indexes::fts::default::DefaultSearchIdx;
+use crate::sql::{
     statements::{
+        Statement,
         create::CreateStatement,
-        delete::DeleteStatement,
         insert::InsertStatement,
         select::SelectStatement,
         update::UpdateStatement,
-        alter::AlterStatement,
+        delete::DeleteStatement,
+        alter::{AlterStatement, AlterType},
         drop::DropStatement,
-        Statement,
+        create_index::CreateIndexStatement,
+        drop_index::DropIndexStatement,
     },
-    table::Table,
+    data_type::DataType,
     column_def::ColumnDef,
+    clauses::{
+        wheres::where_type::WhereType,
+        join_clause::JoinClause,
+    },
+    data_value::DataValue,
+    column::Column,
 };
-use std::collections::HashMap;
+use crate::result::ReefDBResult;
+use crate::error::ReefDBError;
+use crate::transaction::{Transaction, IsolationLevel};
+use crate::transaction_manager::TransactionManager;
+use crate::wal::WriteAheadLog;
+use crate::mvcc::MVCCManager;
+use crate::storage::{Storage, TableStorage};
+use crate::indexes::{index_manager::IndexManager, btree::BTreeIndex, index_manager::IndexType};
+use crate::indexes::fts::search::Search;
 use std::any::Any;
+use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
-use transaction_manager::TransactionManager;
-use wal::WriteAheadLog;
-use transaction::IsolationLevel;
 
-mod error;
-mod result;
-mod indexes;
-mod sql;
-mod storage;
+pub mod storage;
 pub mod transaction;
 pub mod transaction_manager;
 pub mod wal;
+pub mod error;
 pub mod acid;
+pub mod result;
 pub mod mvcc;
 pub mod deadlock;
+pub mod sql;
+pub mod indexes;
 pub mod savepoint;
+pub mod locks;
+pub mod key_format;
+#[cfg(test)]
+pub mod tests;
 
-use storage::{disk::OnDiskStorage, memory::InMemoryStorage, Storage};
-
-#[derive(Clone, Debug)]
-pub struct TableStorage {
-    pub(crate) tables: HashMap<String, Table>,
-}
-
-impl Default for TableStorage {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TableStorage {
-    fn new() -> Self {
-        TableStorage {
-            tables: HashMap::new(),
-        }
-    }
-
-    pub(crate) fn restore_from(&mut self, other: &TableStorage) {
-        // Clear our current state and replace with the other state
-        self.tables.clear();
-        for (name, table) in &other.tables {
-            self.tables.insert(name.clone(), table.clone());
-        }
-    }
-}
-
-impl Storage for TableStorage {
-    type NewArgs = ();
-
-    fn new(_args: Self::NewArgs) -> Self {
-        Self::new()
-    }
-
-    fn insert_table(&mut self, table_name: String, columns: Vec<ColumnDef>, rows: Vec<Vec<DataValue>>) {
-        let mut table = Table::new(columns);
-        for row in rows {
-            table.insert_row(row);
-        }
-        self.tables.insert(table_name, table);
-    }
-
-    fn get_table(&mut self, table_name: &str) -> Option<&mut (Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
-        self.tables.get_mut(table_name).map(|table| &mut table.data)
-    }
-
-    fn table_exists(&self, table_name: &str) -> bool {
-        self.tables.contains_key(table_name)
-    }
-
-    fn push_value(&mut self, table_name: &str, row: Vec<DataValue>) -> usize {
-        if let Some(table) = self.tables.get_mut(table_name) {
-            table.insert_row(row)
-        } else {
-            0
-        }
-    }
-
-    fn update_table(&mut self, table_name: &str, updates: Vec<(String, DataValue)>, where_clause: Option<(String, DataValue)>) -> usize {
-        if let Some(table) = self.tables.get_mut(table_name) {
-            let mut count = 0;
-            for row in &mut table.data.1 {
-                let mut should_update = true;
-                if let Some((col_name, value)) = &where_clause {
-                    if let Some(col_idx) = table.data.0.iter().position(|c| &c.name == col_name) {
-                        if row[col_idx] != *value {
-                            should_update = false;
-                        }
-                    }
-                }
-                if should_update {
-                    for (col_name, new_value) in &updates {
-                        if let Some(col_idx) = table.data.0.iter().position(|c| &c.name == col_name) {
-                            row[col_idx] = new_value.clone();
-                        }
-                    }
-                    count += 1;
-                }
-            }
-            count
-        } else {
-            0
-        }
-    }
-
-    fn delete_table(&mut self, table_name: &str, where_clause: Option<(String, DataValue)>) -> usize {
-        if let Some(table) = self.tables.get_mut(table_name) {
-            let initial_len = table.data.1.len();
-            if let Some((col_name, value)) = where_clause {
-                if let Some(col_idx) = table.data.0.iter().position(|c| c.name == col_name) {
-                    table.data.1.retain(|row| row[col_idx] != value);
-                }
-            } else {
-                table.data.1.clear();
-            }
-            initial_len - table.data.1.len()
-        } else {
-            0
-        }
-    }
-
-    fn get_table_ref(&self, table_name: &str) -> Option<&(Vec<ColumnDef>, Vec<Vec<DataValue>>)> {
-        self.tables.get(table_name).map(|table| &table.data)
-    }
-
-    fn remove_table(&mut self, table_name: &str) -> bool {
-        self.tables.remove(table_name).is_some()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-pub type DefaultSearchIdx = InvertedIndex<DefaultTokenizer>;
-pub type OnDiskSearchIdx = OnDiskInvertedIndex<DefaultTokenizer>;
-
-pub type InMemoryReefDB = ReefDB<InMemoryStorage, DefaultSearchIdx>;
+pub type InMemoryReefDB = ReefDB<storage::memory::InMemoryStorage, indexes::fts::default::DefaultSearchIdx>;
+pub type OnDiskReefDB = ReefDB<storage::disk::OnDiskStorage, indexes::fts::default::DefaultSearchIdx>;
 
 impl InMemoryReefDB {
-    pub fn create_in_memory() -> Self {
-        ReefDB::create(InMemoryStorage::new(()), ())
+    pub fn create_in_memory() -> Result<Self, ReefDBError> {
+        let mut db = ReefDB::<storage::memory::InMemoryStorage, indexes::fts::default::DefaultSearchIdx>::create_with_args(
+            storage::memory::InMemoryStorage::new(()),
+            Default::default(),
+        );
+        db.transaction_manager = Some(TransactionManager::create(
+            db.clone(),
+            WriteAheadLog::new_in_memory()?,
+        ));
+        Ok(db)
     }
 }
 
-pub type OnDiskReefDB = ReefDB<OnDiskStorage, OnDiskSearchIdx>;
-
 impl OnDiskReefDB {
-    pub fn create_on_disk(db_path: String, _index_path: String) -> Result<Self, ReefDBError> {
-        // Convert to PathBuf for proper path manipulation
-        let db_path_buf = PathBuf::from(&db_path);
-        
-        // Get the parent directory, return error if path is invalid
-        let data_dir = db_path_buf.parent()
-            .ok_or_else(|| ReefDBError::Other("Invalid database path: no parent directory".to_string()))?
-            .to_path_buf();
-        
-        // Create all necessary parent directories
-        std::fs::create_dir_all(&data_dir)
-            .map_err(|e| ReefDBError::Other(format!("Failed to create data directory: {}", e)))?;
-        
-        // Initialize storage
-        let storage = OnDiskStorage::new(db_path);
-        
-        // Create database with transaction support
-        let db = ReefDB::with_transaction_support(storage, data_dir)?;
+    pub fn create_on_disk(kv_path: String, index_path: String) -> Result<Self, ReefDBError> {
+        let mut db = ReefDB::<storage::disk::OnDiskStorage, indexes::fts::default::DefaultSearchIdx>::create_with_args(
+            storage::disk::OnDiskStorage::new(kv_path.clone()),
+            Default::default(),
+        );
+        db.transaction_manager = Some(TransactionManager::create(
+            db.clone(),
+            WriteAheadLog::new(PathBuf::from(kv_path + ".wal"))?,
+        ));
         Ok(db)
     }
 }
 
 #[derive(Clone)]
-pub struct ReefDB<S: Storage + Clone, FTS: Search + Clone>
+pub struct ReefDB<S: Storage + IndexManager<()> + Clone + Any, FTS: Search + Clone>
 where
-    FTS::NewArgs: Clone,
+    FTS::NewArgs: Clone + Default,
 {
     pub(crate) tables: TableStorage,
-    pub(crate) inverted_index: HashMap<String, FTS>,
-    storage: S,
-    transaction_manager: Option<TransactionManager<S, FTS>>,
-    data_dir: Option<PathBuf>,
-    autocommit: bool,
-    current_transaction_id: Option<u64>,
+    pub(crate) inverted_index: FTS,
+    pub(crate) storage: S,
+    pub(crate) transaction_manager: Option<TransactionManager<S, FTS>>,
+    pub(crate) data_dir: Option<PathBuf>,
+    pub(crate) autocommit: bool,
+    pub(crate) autocommit_isolation_level: IsolationLevel,
+    pub(crate) mvcc_manager: Arc<Mutex<MVCCManager>>,
+    pub(crate) current_transaction_id: Option<u64>,
 }
 
-impl<S: Storage + Clone, FTS: Search + Clone> ReefDB<S, FTS>
+impl<S: Storage + IndexManager<()> + Clone + Any, FTS: Search + Clone> ReefDB<S, FTS>
 where
-    FTS::NewArgs: Clone,
+    FTS::NewArgs: Clone + Default,
 {
-    pub fn with_transaction_support(storage: S, data_dir: PathBuf) -> Result<Self, ReefDBError> {
-        let wal_path = data_dir.join("reef.wal");
-        let wal = WriteAheadLog::new(wal_path)
-            .map_err(|e| ReefDBError::Other(format!("Failed to create WAL: {}", e)))?;
-        
+    fn create_with_args(storage: S, fts_args: FTS::NewArgs) -> Self {
         let mut db = ReefDB {
             tables: TableStorage::new(),
-            inverted_index: HashMap::new(),
-            storage,
-            transaction_manager: None,
-            data_dir: Some(data_dir),
-            autocommit: false,
-            current_transaction_id: None,
-        };
-        
-        let tm = TransactionManager::create(db.clone(), wal);
-        db.transaction_manager = Some(tm);
-        
-        Ok(db)
-    }
-
-    pub fn create(storage: S, _fts_args: FTS::NewArgs) -> Self {
-        ReefDB {
-            tables: TableStorage::new(),
-            inverted_index: HashMap::new(),
+            inverted_index: FTS::new(fts_args),
             storage,
             transaction_manager: None,
             data_dir: None,
-            autocommit: false,
+            autocommit: true,
+            autocommit_isolation_level: IsolationLevel::ReadCommitted,
+            mvcc_manager: Arc::new(Mutex::new(MVCCManager::new())),
             current_transaction_id: None,
-        }
+        };
+
+        let transaction_manager = Some(TransactionManager::create(
+            db.clone(),
+            WriteAheadLog::new_in_memory().unwrap(),
+        ));
+        db.transaction_manager = transaction_manager;
+        db
     }
 
-    pub fn begin_transaction(&mut self, isolation_level: IsolationLevel) -> Result<u64, ReefDBError> {
-        if let Some(tm) = &mut self.transaction_manager {
-            let tx_id = tm.begin_transaction(isolation_level)?;
-            self.current_transaction_id = Some(tx_id);
-            Ok(tx_id)
-        } else {
-            Err(ReefDBError::Other("Transaction support not enabled".to_string()))
+
+    fn verify_table_exists(&self, table_name: &str) -> Result<(), ReefDBError> {
+        if !self.storage.table_exists(table_name) {
+            return Err(ReefDBError::TableNotFound(table_name.to_string()));
         }
+        Ok(())
     }
 
-    pub fn commit_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        if let Some(tm) = &mut self.transaction_manager {
-            tm.commit_transaction(transaction_id)?;
-            self.current_transaction_id = None;
-            Ok(())
-        } else {
-            Err(ReefDBError::Other("Transaction support not enabled".to_string()))
-        }
+    fn get_table_schema(&self, table_name: &str) -> Result<&(Vec<ColumnDef>, Vec<Vec<DataValue>>), ReefDBError> {
+        self.storage.get_table_ref(table_name)
+            .ok_or_else(|| ReefDBError::TableNotFound(table_name.to_string()))
     }
 
-    pub fn rollback_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        if let Some(tm) = &mut self.transaction_manager {
-            tm.rollback_transaction(transaction_id)?;
-            self.current_transaction_id = None;
-            Ok(())
-        } else {
-            Err(ReefDBError::Other("Transaction support not enabled".to_string()))
+    fn handle_create(&mut self, name: String, columns: Vec<ColumnDef>) -> Result<ReefDBResult, ReefDBError> {
+        if columns.is_empty() {
+            return Err(ReefDBError::Other("Cannot create table with empty column list".to_string()));
         }
-    }
-
-    pub fn query(&mut self, query: &str) -> Result<ReefDBResult, ReefDBError> {
-        let (_, stmt) = Statement::parse(query).unwrap();
         
-        if self.autocommit && self.transaction_manager.is_some() {
-            // If autocommit is enabled and we have transaction support, wrap in a transaction
-            let tx_id = self.begin_transaction(IsolationLevel::ReadCommitted)?;
-            let result = self.execute_statement(stmt);
-            match &result {
-                Ok(_) => self.commit_transaction(tx_id)?,
-                Err(_) => self.rollback_transaction(tx_id)?,
+        // Check if table exists in either storage or tables
+        if self.storage.table_exists(&name) || self.tables.table_exists(&name) {
+            return Err(ReefDBError::Other(format!("Table {} already exists", name)));
+        }
+        
+        // Create table in both storage and tables
+        self.storage.insert_table(name.clone(), columns.clone(), vec![]);
+        self.tables.insert_table(name.clone(), columns.clone(), vec![]);
+
+        // Register FTS columns with the inverted index
+        for column in columns.iter() {
+            if column.data_type == DataType::FTSText {
+                self.inverted_index.add_column(&name, &column.name);
             }
-            result
-        } else if let Some(tx_id) = self.current_transaction_id {
-            // If we're in a transaction, delegate to the transaction manager
-            if let Some(tm) = &mut self.transaction_manager {
-                let result = tm.execute_statement(tx_id, stmt.clone())?;
-                // Update our view of the database state from the transaction
-                let state = tm.get_transaction_state(tx_id)?;
-                self.tables.restore_from(&state);
-                Ok(result)
-            } else {
-                Err(ReefDBError::Other("Transaction support not enabled".to_string()))
+        }
+
+        // Ensure the table was created successfully
+        if !self.storage.table_exists(&name) || !self.tables.table_exists(&name) {
+            return Err(ReefDBError::Other("Failed to create table".to_string()));
+        }
+
+        Ok(ReefDBResult::CreateTable)
+    }
+
+    fn handle_insert(&mut self, table_name: String, values: Vec<DataValue>) -> Result<ReefDBResult, ReefDBError> {
+        // First, collect all the information we need
+        let schema = {
+            let (schema, _) = self.get_table_schema(&table_name)?;
+            schema.clone()
+        };
+
+        // Validate number of values matches number of columns
+        if values.len() != schema.len() {
+            return Err(ReefDBError::Other(format!(
+                "Number of values ({}) does not match number of columns ({})",
+                values.len(),
+                schema.len()
+            )));
+        }
+
+        // Validate value types match column types
+        for (value, column) in values.iter().zip(schema.iter()) {
+            if !value.matches_type(&column.data_type) {
+                return Err(ReefDBError::Other(format!(
+                    "Value type mismatch for column {}: expected {:?}, got {:?}",
+                    column.name,
+                    column.data_type,
+                    value
+                )));
             }
+        }
+
+        // Insert the values into both storage and tables
+        let row_id = self.storage.push_value(&table_name, values.clone())?;
+        self.tables.push_value(&table_name, values.clone())?;
+
+        // Update FTS index for any FTS columns
+        for (i, col) in schema.iter().enumerate() {
+            if col.data_type == DataType::FTSText {
+                if let DataValue::Text(text) = &values[i] {
+                    self.inverted_index.add_document(&table_name, &col.name, row_id, text);
+                }
+            }
+        }
+
+        Ok(ReefDBResult::Insert(row_id))
+    }
+
+    fn handle_select(&self, table_name: String, columns: Vec<Column>, where_clause: Option<WhereType>, joins: Vec<JoinClause>) 
+        -> Result<ReefDBResult, ReefDBError> 
+    {
+        self.verify_table_exists(&table_name)?;
+        let (schema, data) = self.get_table_schema(&table_name)?;
+        
+        let mut result = Vec::new();
+        if joins.is_empty() {
+            self.handle_simple_select(&table_name, schema, data, &columns, where_clause, &mut result)?;
         } else {
-            // Not in a transaction and autocommit is off
-            match stmt {
-                Statement::Savepoint(_) | Statement::RollbackToSavepoint(_) | Statement::ReleaseSavepoint(_) => {
-                    Err(ReefDBError::Other("Cannot use savepoints outside of a transaction".to_string()))
-                },
-                _ => self.execute_statement(stmt)
-            }
+            self.handle_join_select(&table_name, schema, data, &columns, where_clause, &joins, &mut result)?;
         }
+        
+        Ok(ReefDBResult::Select(result))
     }
 
-    pub fn create_table(&mut self, stmt: CreateStatement) -> Result<ReefDBResult, ReefDBError> {
-        match stmt {
-            CreateStatement::Table(table_name, columns) => {
-                // Initialize FTS index for the table if it has any FTS columns
-                let has_fts_columns = columns.iter().any(|col| col.data_type == sql::data_type::DataType::FTSText);
-                if has_fts_columns {
-                    let new_index = FTS::new(FTS::NewArgs::default());
-                    self.inverted_index.insert(table_name.clone(), new_index);
-                }
+    fn handle_simple_select(
+        &self,
+        table_name: &str,
+        schema: &Vec<ColumnDef>,
+        data: &Vec<Vec<DataValue>>,
+        columns: &[Column],
+        where_clause: Option<WhereType>,
+        result: &mut Vec<(usize, Vec<DataValue>)>,
+    ) -> Result<(), ReefDBError> {
+        for (i, row) in data.iter().enumerate() {
+            let include_row = if let Some(where_clause) = &where_clause {
+                self.evaluate_where_clause(where_clause, row, &[], schema, &[], table_name)?
+            } else {
+                true
+            };
 
-                // Add FTS columns to the inverted index
-                for column in &columns {
-                    if column.data_type == sql::data_type::DataType::FTSText {
-                        if let Some(index) = self.inverted_index.get_mut(&table_name) {
-                            index.add_column(&table_name, &column.name);
-                        }
-                    }
-                }
-                self.tables.insert_table(table_name, columns, vec![]);
-                Ok(ReefDBResult::CreateTable)
-            }
-        }
-    }
-
-    pub fn insert(&mut self, stmt: InsertStatement) -> Result<ReefDBResult, ReefDBError> {
-        match stmt {
-            InsertStatement::IntoTable(table_name, values) => {
-                let row_id = self.tables.push_value(&table_name, values.clone());
-                
-                // Add FTS values to the inverted index
-                if let Some((schema, _)) = self.tables.get_table(&table_name) {
-                    for (i, column) in schema.iter().enumerate() {
-                        if column.data_type == sql::data_type::DataType::FTSText {
-                            if let DataValue::Text(text) = &values[i] {
-                                if let Some(index) = self.inverted_index.get_mut(&table_name) {
-                                    index.add_document(&table_name, &column.name, row_id, text);
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                Ok(ReefDBResult::Insert(row_id + 1))
-            }
-        }
-    }
-
-    pub fn select(&mut self, stmt: SelectStatement) -> Result<ReefDBResult, ReefDBError> {
-        match stmt {
-            SelectStatement::FromTable(table_name, columns, where_clause, joins) => {
-                // Get all the data we need upfront to avoid multiple mutable borrows
-                let main_table = if let Some((schema, data)) = self.tables.get_table(&table_name) {
-                    Some((schema.clone(), data.clone()))
-                } else {
-                    return Err(ReefDBError::TableNotFound(table_name));
-                };
-
-                let mut result = Vec::new();
-                let (schema, data) = main_table.unwrap();
-
-                if joins.is_empty() {
-                    // Handle where clause if present
-                    let filtered_rows: Vec<_> = if let Some(where_type) = where_clause {
-                        match where_type {
-                            WhereType::Regular(where_clause) => {
-                                let col_idx = schema.iter().position(|c| c.name == where_clause.col_name).unwrap();
-                                data.iter().enumerate()
-                                    .filter(|(_, row)| row[col_idx] == where_clause.value)
-                                    .collect()
-                            }
-                            WhereType::FTS(fts_clause) => {
-                                let matching_rows = self.search_fts(&table_name, &fts_clause.col.name, &fts_clause.query);
-                                data.iter().enumerate()
-                                    .filter(|(i, _)| matching_rows.contains(i))
-                                    .collect()
-                            }
-                        }
+            if include_row {
+                let mut selected_values = Vec::new();
+                for col in columns {
+                    if col.name == "*" {
+                        selected_values.extend(row.iter().cloned());
                     } else {
-                        data.iter().enumerate().collect()
-                    };
-
-                    // Select requested columns
-                    for (i, row) in filtered_rows {
-                        let mut selected_values = Vec::new();
-                        for col in &columns {
-                            if let Some(col_idx) = schema.iter().position(|c| c.name == col.name) {
-                                selected_values.push(row[col_idx].clone());
-                            }
-                        }
-                        result.push((i, selected_values));
+                        let col_idx = schema.iter()
+                            .position(|c| c.name == col.name)
+                            .ok_or_else(|| ReefDBError::ColumnNotFound(col.name.clone()))?;
+                        selected_values.push(row[col_idx].clone());
                     }
-                } else {
-                    // Handle joins
-                    for join in &joins {
-                        let join_table = if let Some((schema, data)) = self.tables.get_table(&join.table_name) {
-                            (schema.clone(), data.clone())
-                        } else {
-                            continue;
-                        };
+                }
+                result.push((i, selected_values));
+            }
+        }
+        Ok(())
+    }
 
-                        let (join_schema, join_data) = join_table;
-                        
-                        for (i, row) in data.iter().enumerate() {
-                            // Find the join column indices
-                            let left_col_idx = schema.iter().position(|c| c.name == join.on.0.column_name).unwrap();
-                            let right_col_idx = join_schema.iter().position(|c| c.name == join.on.1.column_name).unwrap();
+    fn handle_join_select(
+        &self,
+        table_name: &str,
+        schema: &Vec<ColumnDef>,
+        data: &Vec<Vec<DataValue>>,
+        columns: &[Column],
+        where_clause: Option<WhereType>,
+        joins: &[JoinClause],
+        result: &mut Vec<(usize, Vec<DataValue>)>,
+    ) -> Result<(), ReefDBError> {
+        for join in joins {
+            if let Some((join_schema, join_data)) = self.storage.get_table_ref(&join.table_name) {
+                let left_col_idx = schema.iter()
+                    .position(|c| c.name == join.on.0.column_name)
+                    .ok_or_else(|| ReefDBError::ColumnNotFound(join.on.0.column_name.clone()))?;
+                let right_col_idx = join_schema.iter()
+                    .position(|c| c.name == join.on.1.column_name)
+                    .ok_or_else(|| ReefDBError::ColumnNotFound(join.on.1.column_name.clone()))?;
 
-                            // Find matching rows in the joined table
-                            for join_row in join_data.iter() {
-                                if row[left_col_idx] == join_row[right_col_idx] {
-                                    let mut selected_values = Vec::new();
-                                    
-                                    // Select requested columns from both tables
-                                    for col in &columns {
-                                        if let Some(table) = &col.table {
-                                            if table == &table_name {
-                                                if let Some(idx) = schema.iter().position(|c| c.name == col.name) {
-                                                    selected_values.push(row[idx].clone());
-                                                }
-                                            } else if table == &join.table_name {
+                for (i, row) in data.iter().enumerate() {
+                    for join_row in join_data.iter() {
+                        if row[left_col_idx] == join_row[right_col_idx] {
+                            let include_row = if let Some(where_clause) = &where_clause {
+                                self.evaluate_where_clause(where_clause, row, join_row, schema, join_schema, table_name)?
+                            } else {
+                                true
+                            };
+
+                            if include_row {
+                                let mut selected_values = Vec::new();
+                                for col in columns {
+                                    if col.name == "*" {
+                                        selected_values.extend(row.iter().cloned());
+                                        selected_values.extend(join_row.iter().cloned());
+                                    } else {
+                                        let value = if let Some(table) = &col.table {
+                                            if table == &join.table_name {
                                                 if let Some(idx) = join_schema.iter().position(|c| c.name == col.name) {
-                                                    selected_values.push(join_row[idx].clone());
+                                                    join_row[idx].clone()
+                                                } else {
+                                                    continue;
+                                                }
+                                            } else {
+                                                if let Some(idx) = schema.iter().position(|c| c.name == col.name) {
+                                                    row[idx].clone()
+                                                } else {
+                                                    continue;
                                                 }
                                             }
-                                        }
+                                        } else {
+                                            if let Some(idx) = schema.iter().position(|c| c.name == col.name) {
+                                                row[idx].clone()
+                                            } else if let Some(idx) = join_schema.iter().position(|c| c.name == col.name) {
+                                                join_row[idx].clone()
+                                            } else {
+                                                continue;
+                                            }
+                                        };
+                                        selected_values.push(value);
                                     }
-                                    result.push((i, selected_values));
                                 }
+                                result.push((i, selected_values));
                             }
                         }
                     }
                 }
-                Ok(ReefDBResult::Select(result))
             }
         }
+        Ok(())
     }
 
-    pub fn update(&mut self, stmt: UpdateStatement) -> Result<ReefDBResult, ReefDBError> {
-        match stmt {
-            UpdateStatement::UpdateTable(table_name, updates, where_clause) => {
-                let rows_affected = self.tables.update_table(&table_name, updates, where_clause.map(|w| match w {
-                    WhereType::Regular(clause) => (clause.col_name, clause.value),
-                    WhereType::FTS(_) => unimplemented!("FTS where clauses are not supported for updates"),
-                }));
-                Ok(ReefDBResult::Update(rows_affected))
-            }
-        }
-    }
-
-    pub fn delete(&mut self, stmt: DeleteStatement) -> Result<ReefDBResult, ReefDBError> {
-        match stmt {
-            DeleteStatement::FromTable(table_name, where_clause) => {
-                let rows_affected = self.tables.delete_table(&table_name, where_clause.map(|w| match w {
-                    WhereType::Regular(clause) => (clause.col_name, clause.value),
-                    WhereType::FTS(_) => unimplemented!("FTS where clauses are not supported for deletes"),
-                }));
-                Ok(ReefDBResult::Delete(rows_affected))
-            }
-        }
-    }
-
-    pub fn alter_table(&mut self, stmt: AlterStatement) -> Result<ReefDBResult, ReefDBError> {
-        let table_name = stmt.table_name.clone();
-        if let Some((schema, rows)) = self.tables.get_table(&table_name) {
-            match stmt.alter_type {
-                sql::statements::alter::AlterType::AddColumn(column_def) => {
-                    schema.push(column_def.clone());
-                    for row in rows.iter_mut() {
-                        row.push(DataValue::Text("NULL".to_string()));
-                    }
-                    if column_def.data_type == sql::data_type::DataType::FTSText {
-                        self.add_fts_column(&table_name, &column_def.name);
-                    }
-                }
-                sql::statements::alter::AlterType::DropColumn(column_name) => {
-                    if let Some(col_idx) = schema.iter().position(|c| c.name == column_name) {
-                        schema.remove(col_idx);
-                        for row in rows.iter_mut() {
-                            row.remove(col_idx);
-                        }
+    fn evaluate_where_clause(
+        &self,
+        where_clause: &WhereType,
+        row: &[DataValue],
+        join_row: &[DataValue],
+        schema: &[ColumnDef],
+        join_schema: &[ColumnDef],
+        main_table: &str,
+    ) -> Result<bool, ReefDBError> {
+        match where_clause {
+            WhereType::Regular(clause) => {
+                let (col_idx, row_to_check) = if let Some(table) = &clause.table {
+                    if table == main_table {
+                        let idx = schema.iter()
+                            .position(|c| c.name == clause.col_name)
+                            .ok_or_else(|| ReefDBError::ColumnNotFound(format!("{}.{}", table, clause.col_name)))?;
+                        (idx, row)
                     } else {
-                        return Err(ReefDBError::ColumnNotFound(column_name));
+                        let idx = join_schema.iter()
+                            .position(|c| c.name == clause.col_name)
+                            .ok_or_else(|| ReefDBError::ColumnNotFound(format!("{}.{}", table, clause.col_name)))?;
+                        (idx, join_row)
                     }
-                }
-                sql::statements::alter::AlterType::RenameColumn(old_name, new_name) => {
-                    if let Some(col) = schema.iter_mut().find(|c| c.name == old_name) {
-                        col.name = new_name;
+                } else {
+                    // If no table is specified, try both schemas in order
+                    if let Some(idx) = schema.iter().position(|c| c.name == clause.col_name) {
+                        (idx, row)
+                    } else if let Some(idx) = join_schema.iter().position(|c| c.name == clause.col_name) {
+                        (idx, join_row)
                     } else {
-                        return Err(ReefDBError::ColumnNotFound(old_name));
+                        return Err(ReefDBError::ColumnNotFound(clause.col_name.clone()));
                     }
-                }
+                };
+
+                Ok(clause.operator.evaluate(&row_to_check[col_idx], &clause.value))
             }
-            Ok(ReefDBResult::AlterTable)
-        } else {
-            Err(ReefDBError::TableNotFound(table_name))
+            WhereType::FTS(clause) => {
+                let table_name = if let Some(table) = &clause.col.table {
+                    table
+                } else {
+                    main_table
+                };
+                let col_name = &clause.col.name;
+                let query = &clause.query;
+                
+                // Get the row ID from the current row
+                let row_id = match row.first()
+                    .ok_or_else(|| ReefDBError::Other("Row is empty".to_string()))? {
+                    DataValue::Integer(id) => *id,
+                    _ => return Err(ReefDBError::Other("First column is not an integer".to_string())),
+                };
+                
+                // Search the inverted index
+                let results = self.inverted_index.search(table_name, col_name, query);
+                
+                Ok(results.contains(&(row_id as usize)))
+            }
+            WhereType::And(left, right) => {
+                let left_result = self.evaluate_where_clause(left, row, join_row, schema, join_schema, main_table)?;
+                let right_result = self.evaluate_where_clause(right, row, join_row, schema, join_schema, main_table)?;
+                Ok(left_result && right_result)
+            }
+            WhereType::Or(left, right) => {
+                let left_result = self.evaluate_where_clause(left, row, join_row, schema, join_schema, main_table)?;
+                let right_result = self.evaluate_where_clause(right, row, join_row, schema, join_schema, main_table)?;
+                Ok(left_result || right_result)
+            }
         }
     }
 
-    pub fn drop_table(&mut self, stmt: DropStatement) -> Result<ReefDBResult, ReefDBError> {
-        let table_name = stmt.table_name.clone();
-        if self.tables.remove_table(&table_name) {
-            Ok(ReefDBResult::DropTable)
+    fn handle_update(
+        &mut self,
+        table_name: String,
+        updates: Vec<(String, DataValue)>,
+        where_clause: Option<WhereType>,
+    ) -> Result<ReefDBResult, ReefDBError> {
+        self.verify_table_exists(&table_name)?;
+        let (schema, _) = self.get_table_schema(&table_name)?;
+
+        // Validate update columns exist and value types match
+        for (col_name, value) in &updates {
+            let column = schema.iter()
+                .find(|c| &c.name == col_name)
+                .ok_or_else(|| ReefDBError::ColumnNotFound(col_name.clone()))?;
+
+            if !value.matches_type(&column.data_type) {
+                return Err(ReefDBError::Other(format!(
+                    "Value type mismatch for column {}: expected {:?}, got {:?}",
+                    col_name,
+                    column.data_type,
+                    value
+                )));
+            }
+        }
+
+        // Validate where clause column exists if present
+        if let Some(where_clause) = &where_clause {
+            self.validate_where_clause(where_clause, &schema)?;
+        }
+
+        // Convert WhereType to simple where clause for storage layer
+        let storage_where = where_clause.and_then(|w| match w {
+            WhereType::Regular(clause) => Some((clause.col_name, clause.value)),
+            WhereType::FTS(_) => None, // FTS not supported for updates
+            WhereType::And(_, _) => None, // Complex conditions not supported for updates
+            WhereType::Or(_, _) => None, // Complex conditions not supported for updates
+        });
+
+        let updated_count = self.storage.update_table(&table_name, updates, storage_where);
+        Ok(ReefDBResult::Update(updated_count))
+    }
+
+    fn validate_where_clause(&self, where_clause: &WhereType, schema: &[ColumnDef]) -> Result<(), ReefDBError> {
+        match where_clause {
+            WhereType::Regular(clause) => {
+                if !schema.iter().any(|c| c.name == clause.col_name) {
+                    return Err(ReefDBError::ColumnNotFound(clause.col_name.clone()));
+                }
+            }
+            WhereType::FTS(clause) => {
+                if !schema.iter().any(|c| c.name == clause.col.name) {
+                    return Err(ReefDBError::ColumnNotFound(clause.col.name.clone()));
+                }
+            }
+            WhereType::And(left, right) => {
+                self.validate_where_clause(left, schema)?;
+                self.validate_where_clause(right, schema)?;
+            }
+            WhereType::Or(left, right) => {
+                self.validate_where_clause(left, schema)?;
+                self.validate_where_clause(right, schema)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_delete(
+        &mut self,
+        table_name: String,
+        where_clause: Option<WhereType>,
+    ) -> Result<ReefDBResult, ReefDBError> {
+        self.verify_table_exists(&table_name)?;
+        let (schema, _) = self.get_table_schema(&table_name)?;
+
+        // Validate where clause column exists if present
+        if let Some(where_clause) = &where_clause {
+            self.validate_where_clause(where_clause, &schema)?;
+        }
+
+        // Convert WhereType to simple where clause for storage layer
+        let storage_where = where_clause.and_then(|w| match w {
+            WhereType::Regular(clause) => Some((clause.col_name, clause.value)),
+            WhereType::FTS(_) => None, // FTS not supported for deletes
+            WhereType::And(_, _) => None, // Complex conditions not supported for deletes
+            WhereType::Or(_, _) => None, // Complex conditions not supported for deletes
+        });
+
+        let deleted_count = self.storage.delete_table(&table_name, storage_where);
+        Ok(ReefDBResult::Delete(deleted_count))
+    }
+
+    fn handle_alter(&mut self, table_name: String, alter_type: AlterType) -> Result<ReefDBResult, ReefDBError> {
+        self.verify_table_exists(&table_name)?;
+        let (schema, _) = self.get_table_schema(&table_name)?;
+
+        match alter_type {
+            AlterType::AddColumn(column_def) => {
+                // Verify column doesn't already exist
+                if schema.iter().any(|c| c.name == column_def.name) {
+                    return Err(ReefDBError::Other(
+                        format!("Column {} already exists in table {}", column_def.name, table_name)
+                    ));
+                }
+
+                self.storage.add_column(&table_name, column_def)?;
+            },
+            AlterType::DropColumn(column_name) => {
+                self.storage.drop_column(&table_name, &column_name)?;
+            },
+            AlterType::RenameColumn(old_name, new_name) => {
+                // Verify new name doesn't already exist
+                if schema.iter().any(|c| c.name == new_name) {
+                    return Err(ReefDBError::Other(
+                        format!("Column {} already exists in table {}", new_name, table_name)
+                    ));
+                }
+
+                self.storage.rename_column(&table_name, &old_name, &new_name)?;
+            }
+        }
+
+        Ok(ReefDBResult::AlterTable)
+    }
+
+    fn handle_drop(&mut self, table_name: String) -> Result<ReefDBResult, ReefDBError> {
+        self.verify_table_exists(&table_name)?;
+        self.storage.drop_table(&table_name);
+        self.tables.drop_table(&table_name);
+        Ok(ReefDBResult::DropTable)
+    }
+
+    fn handle_create_index(&mut self, stmt: CreateIndexStatement) -> Result<ReefDBResult, ReefDBError> {
+        self.verify_table_exists(&stmt.table_name)?;
+        let (schema, _) = self.get_table_schema(&stmt.table_name)?;
+
+        // Verify column exists
+        if !schema.iter().any(|c| c.name == stmt.column_name) {
+            return Err(ReefDBError::ColumnNotFound(stmt.column_name));
+        }
+
+        // Create B-Tree index
+        let btree = BTreeIndex::new();
+        self.storage.create_index(&stmt.table_name, &stmt.column_name, IndexType::BTree(btree));
+
+        Ok(ReefDBResult::CreateIndex)
+    }
+
+    fn handle_drop_index(&mut self, stmt: DropIndexStatement) -> Result<ReefDBResult, ReefDBError> {
+        self.verify_table_exists(&stmt.table_name)?;
+        let (schema, _) = self.get_table_schema(&stmt.table_name)?;
+
+        // Verify column exists
+        if !schema.iter().any(|c| c.name == stmt.column_name) {
+            return Err(ReefDBError::ColumnNotFound(stmt.column_name));
+        }
+
+        // Drop the index
+        self.storage.drop_index(&stmt.table_name, &stmt.column_name);
+
+        Ok(ReefDBResult::DropIndex)
+    }
+
+    fn handle_savepoint(&mut self, name: String) -> Result<ReefDBResult, ReefDBError> {
+        if let Some(tx_id) = self.current_transaction_id {
+            if let Some(tm) = &mut self.transaction_manager {
+                tm.create_savepoint(tx_id, name)?;
+                Ok(ReefDBResult::Savepoint)
+            } else {
+                Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+            }
         } else {
-            Err(ReefDBError::TableNotFound(table_name))
+            Err(ReefDBError::TransactionNotActive)
+        }
+    }
+
+    fn handle_rollback_to_savepoint(&mut self, name: String) -> Result<ReefDBResult, ReefDBError> {
+        if let Some(tx_id) = self.current_transaction_id {
+            if let Some(tm) = &mut self.transaction_manager {
+                let restored_state = tm.rollback_to_savepoint(tx_id, &name)?;
+                
+                // First clear both states
+                self.tables = TableStorage::new();
+                self.storage.clear();
+                
+                // Then restore from the savepoint state
+                for (table_name, (columns, rows)) in restored_state.tables.iter() {
+                    // Create the table in both storage and tables
+                    self.storage.insert_table(table_name.clone(), columns.clone(), rows.clone());
+                    self.tables.insert_table(table_name.clone(), columns.clone(), rows.clone());
+                }
+                
+                Ok(ReefDBResult::RollbackToSavepoint)
+            } else {
+                Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+            }
+        } else {
+            Err(ReefDBError::TransactionNotActive)
+        }
+    }
+
+    fn handle_release_savepoint(&mut self, name: String) -> Result<ReefDBResult, ReefDBError> {
+        if let Some(tx_id) = self.current_transaction_id {
+            if let Some(tm) = &mut self.transaction_manager {
+                tm.release_savepoint(tx_id, &name)?;
+                Ok(ReefDBResult::ReleaseSavepoint)
+            } else {
+                Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+            }
+        } else {
+            Err(ReefDBError::TransactionNotActive)
+        }
+    }
+
+    fn handle_begin_transaction(&mut self) -> Result<ReefDBResult, ReefDBError> {
+        if let Some(tm) = &mut self.transaction_manager {
+            let tx_id = tm.begin_transaction(IsolationLevel::Serializable)?;
+            self.current_transaction_id = Some(tx_id);
+            Ok(ReefDBResult::BeginTransaction)
+        } else {
+            Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+        }
+    }
+
+    fn handle_commit(&mut self) -> Result<ReefDBResult, ReefDBError> {
+        if let Some(tx_id) = self.current_transaction_id {
+            if let Some(tm) = &mut self.transaction_manager {
+                tm.commit_transaction(tx_id)?;
+                self.current_transaction_id = None;
+                Ok(ReefDBResult::Commit)
+            } else {
+                Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+            }
+        } else {
+            Err(ReefDBError::TransactionNotActive)
         }
     }
 
     pub fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
-        // If we're in a transaction, delegate all statements to the transaction manager
-        if let Some(tx_id) = self.current_transaction_id {
-            if let Some(tm) = &mut self.transaction_manager {
-                let result = tm.execute_statement(tx_id, stmt)?;
-                // Update our view of the database state from the transaction
-                let state = tm.get_transaction_state(tx_id)?;
-                self.tables.restore_from(&state);
-                return Ok(result);
-            } else {
-                return Err(ReefDBError::Other("Transaction support not enabled".to_string()));
-            }
-        }
-
-        // Not in a transaction, handle statements directly
         match stmt {
-            Statement::Create(create_stmt) => self.create_table(create_stmt),
-            Statement::Insert(insert_stmt) => self.insert(insert_stmt),
-            Statement::Select(select_stmt) => self.select(select_stmt),
-            Statement::Update(update_stmt) => self.update(update_stmt),
-            Statement::Delete(delete_stmt) => self.delete(delete_stmt),
-            Statement::Alter(alter_stmt) => self.alter_table(alter_stmt),
-            Statement::Drop(drop_stmt) => self.drop_table(drop_stmt),
-            Statement::CreateIndex(_) => Ok(ReefDBResult::CreateIndex),
-            Statement::DropIndex(_) => Ok(ReefDBResult::DropIndex),
-            Statement::Savepoint(_) | Statement::RollbackToSavepoint(_) | Statement::ReleaseSavepoint(_) => {
-                Err(ReefDBError::Other("Cannot use savepoints outside of a transaction".to_string()))
+            Statement::Create(CreateStatement::Table(name, columns)) => {
+                self.handle_create(name, columns)
+            },
+            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, joins)) => {
+                self.handle_select(table_name, columns, where_clause, joins)
+            },
+            Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
+                self.handle_insert(table_name, values)
+            },
+            Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
+                self.handle_update(table_name, updates, where_clause)
+            },
+            Statement::Delete(DeleteStatement::FromTable(table_name, where_clause)) => {
+                self.handle_delete(table_name, where_clause)
+            },
+            Statement::Alter(AlterStatement { table_name, alter_type }) => {
+                self.handle_alter(table_name, alter_type)
+            },
+            Statement::Drop(DropStatement { table_name }) => {
+                self.handle_drop(table_name)
+            },
+            Statement::CreateIndex(stmt) => {
+                self.handle_create_index(stmt)
+            },
+            Statement::DropIndex(stmt) => {
+                self.handle_drop_index(stmt)
+            },
+            Statement::Savepoint(sp_stmt) => {
+                self.handle_savepoint(sp_stmt.name)
+            },
+            Statement::RollbackToSavepoint(name) => {
+                self.handle_rollback_to_savepoint(name)
+            },
+            Statement::ReleaseSavepoint(name) => {
+                self.handle_release_savepoint(name)
+            },
+            Statement::BeginTransaction => {
+                self.handle_begin_transaction()
+            },
+            Statement::Commit => {
+                self.handle_commit()
             },
         }
     }
 
-    fn search_fts(&self, table_name: &str, column_name: &str, query: &str) -> Vec<usize> {
-        if let Some(index) = self.inverted_index.get(table_name) {
-            index.search(table_name, column_name, query).into_iter().collect()
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn add_to_fts(&mut self, table_name: &str, column_name: &str, row_id: usize, text: &str) {
-        if let Some(index) = self.inverted_index.get_mut(table_name) {
-            index.add_document(table_name, column_name, row_id, text);
-        }
-    }
-
-    fn add_fts_column(&mut self, table_name: &str, column_name: &str) {
-        if !self.inverted_index.contains_key(table_name) {
-            let new_index = FTS::new(FTS::NewArgs::default());
-            self.inverted_index.insert(table_name.to_string(), new_index);
-        }
-        if let Some(index) = self.inverted_index.get_mut(table_name) {
-            index.add_column(table_name, column_name);
-        }
-    }
-
-    pub fn set_autocommit(&mut self, enabled: bool) {
-        self.autocommit = enabled;
-    }
-
-    pub fn get_autocommit(&self) -> bool {
-        self.autocommit
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sql::data_value::DataValue;
-
-    #[test]
-    fn test_inner_join() {
-        let mut db = InMemoryReefDB::create_in_memory();
-
-        let queries = vec![
-            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
-            "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT, user_id INTEGER FOREIGN KEY (id) REFERENCES users)",
-            "INSERT INTO users VALUES (1, 'Alice')",
-            "INSERT INTO users VALUES (2, 'Bob')",
-            "INSERT INTO posts VALUES (1, 'Post 1', 1)",
-            "INSERT INTO posts VALUES (2, 'Post 2', 2)",
-            "SELECT users.name, posts.title FROM users INNER JOIN posts ON users.id = posts.user_id",
-        ];
-
-        let mut results = Vec::new();
-        for query in queries {
-            let (_, stmt) = Statement::parse(query).unwrap();
-            results.push(db.execute_statement(stmt));
-        }
-
-        let expected_results = vec![
-            Ok(ReefDBResult::CreateTable),
-            Ok(ReefDBResult::CreateTable),
-            Ok(ReefDBResult::Insert(1)),
-            Ok(ReefDBResult::Insert(2)),
-            Ok(ReefDBResult::Insert(1)),
-            Ok(ReefDBResult::Insert(2)),
-            Ok(ReefDBResult::Select(vec![
-                (0, vec![
-                    DataValue::Text("Alice".to_string()),
-                    DataValue::Text("Post 1".to_string()),
-                ]),
-                (1, vec![
-                    DataValue::Text("Bob".to_string()),
-                    DataValue::Text("Post 2".to_string()),
-                ]),
-            ])),
-        ];
-        assert_eq!(results, expected_results);
-    }
-
-    #[test]
-    fn test_fts_text_search() {
-        let mut db = InMemoryReefDB::create_in_memory();
-
-        let queries = vec![
-            "CREATE TABLE books (title TEXT, author TEXT, description FTS_TEXT)",
-            "INSERT INTO books VALUES ('Book 1', 'Author 1', 'A book about the history of computer science.')",
-            "INSERT INTO books VALUES ('Book 2', 'Author 2', 'A book about modern programming languages.')",
-            "INSERT INTO books VALUES ('Book 3', 'Author 3', 'A book about the future of artificial intelligence.')",
-            "SELECT title, author FROM books WHERE description MATCH 'computer science'",
-            "SELECT title, author FROM books WHERE description MATCH 'artificial intelligence'",
-        ];
-
-        let mut results = Vec::new();
-        for query in queries {
-            let (_, stmt) = Statement::parse(query).unwrap();
-            results.push(db.execute_statement(stmt));
-        }
-
-        let expected_results = vec![
-            Ok(ReefDBResult::CreateTable),
-            Ok(ReefDBResult::Insert(1)),
-            Ok(ReefDBResult::Insert(2)),
-            Ok(ReefDBResult::Insert(3)),
-            Ok(ReefDBResult::Select(vec![(
-                0,
-                vec![
-                    DataValue::Text("Book 1".to_string()),
-                    DataValue::Text("Author 1".to_string()),
-                ],
-            )])),
-            Ok(ReefDBResult::Select(vec![(
-                2,
-                vec![
-                    DataValue::Text("Book 3".to_string()),
-                    DataValue::Text("Author 3".to_string()),
-                ],
-            )])),
-        ];
-
-        assert_eq!(results, expected_results);
-    }
-
-    #[test]
-    fn test_database_on_disk() {
-        use std::fs::{create_dir_all, remove_dir_all};
-        use std::path::Path;
-
-        // Create test directory with absolute path
-        let test_dir = Path::new("./test_db");
-        let _ = remove_dir_all(test_dir); // Clean up any previous test data
-        create_dir_all(test_dir).unwrap();
-
-        // Create subdirectories
-        let db_dir = test_dir.join("db");
-        let index_dir = test_dir.join("index");
-        create_dir_all(&db_dir).unwrap();
-        create_dir_all(&index_dir).unwrap();
-
-        let db_path = db_dir.join("test.db");
-        let index_path = index_dir.join("test.idx");
-
-        let mut db = OnDiskReefDB::create_on_disk(
-            db_path.to_string_lossy().to_string(),
-            index_path.to_string_lossy().to_string()
-        ).unwrap();
-
-        let queries = vec![
-            "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users VALUES ('alice', 30)",
-            "INSERT INTO users VALUES ('bob', 28)",
-            "UPDATE users SET age = 31 WHERE name = 'bob'",
-            "SELECT name, age FROM users",
-            "SELECT name FROM users",
-            "SELECT name FROM users WHERE age = 30",
-        ];
-
-        let mut results = Vec::new();
-        for query in queries {
-            results.push(db.query(query));
-        }
-
-        // Rest of the test assertions...
-        drop(db); // Ensure db is dropped before cleanup
-        let _ = remove_dir_all(test_dir); // Clean up test directory
-    }
-
-    #[test]
-    fn test_delete() {
-        let mut db = InMemoryReefDB::create_in_memory();
-        let queries = vec![
-            "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users VALUES ('alice', 30)",
-            "INSERT INTO users VALUES ('bob', 28)",
-            "DELETE FROM users WHERE name = 'bob'",
-            "SELECT name, age FROM users",
-            "SELECT name FROM users",
-            "SELECT name FROM users WHERE age = 30",
-        ];
-
-        let mut results = Vec::new();
-        for query in queries {
-            let (_, stmt) = Statement::parse(query).unwrap();
-            results.push(db.execute_statement(stmt));
-        }
-
-        let expected_results = vec![
-            Ok(ReefDBResult::CreateTable),
-            Ok(ReefDBResult::Insert(1)),
-            Ok(ReefDBResult::Insert(2)),
-            Ok(ReefDBResult::Delete(1)),
-            Ok(ReefDBResult::Select(vec![(
-                0,
-                vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
-            )])),
-            Ok(ReefDBResult::Select(vec![(
-                0,
-                vec![DataValue::Text("alice".to_string())],
-            )])),
-            Ok(ReefDBResult::Select(vec![(
-                0,
-                vec![DataValue::Text("alice".to_string())],
-            )])),
-        ];
-        assert_eq!(results, expected_results);
-    }
-
-    #[test]
-    fn test_alter_and_drop() {
-        let mut db = InMemoryReefDB::create_in_memory();
-
-        let queries = vec![
-            "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users VALUES ('alice', 30)",
-            "ALTER TABLE users ADD COLUMN email TEXT",
-            "SELECT name, age, email FROM users",
-            "ALTER TABLE users RENAME COLUMN email TO contact",
-            "SELECT name, age, contact FROM users",
-            "ALTER TABLE users DROP COLUMN contact",
-            "SELECT name, age FROM users",
-            "DROP TABLE users",
-            "CREATE TABLE users (name TEXT)",  // Should work as table was dropped
-        ];
-
-        let mut results = Vec::new();
-        for query in queries {
-            let (_, stmt) = Statement::parse(query).unwrap();
-            results.push(db.execute_statement(stmt));
-        }
-
-        let expected_results = vec![
-            Ok(ReefDBResult::CreateTable),
-            Ok(ReefDBResult::Insert(1)),
-            Ok(ReefDBResult::AlterTable),
-            Ok(ReefDBResult::Select(vec![(
-                0,
-                vec![
-                    DataValue::Text("alice".to_string()),
-                    DataValue::Integer(30),
-                    DataValue::Text("NULL".to_string()),
-                ],
-            )])),
-            Ok(ReefDBResult::AlterTable),
-            Ok(ReefDBResult::Select(vec![(
-                0,
-                vec![
-                    DataValue::Text("alice".to_string()),
-                    DataValue::Integer(30),
-                    DataValue::Text("NULL".to_string()),
-                ],
-            )])),
-            Ok(ReefDBResult::AlterTable),
-            Ok(ReefDBResult::Select(vec![(
-                0,
-                vec![
-                    DataValue::Text("alice".to_string()),
-                    DataValue::Integer(30),
-                ],
-            )])),
-            Ok(ReefDBResult::DropTable),
-            Ok(ReefDBResult::CreateTable),
-        ];
-
-        assert_eq!(results, expected_results);
-    }
-
-    #[test]
-    fn test_database() {
-        let mut db = InMemoryReefDB::create_in_memory();
-
-        let queries = vec![
-            "CREATE TABLE users (name TEXT, age INTEGER)",
-            "INSERT INTO users VALUES ('alice', 30)",
-            "INSERT INTO users VALUES ('bob', 28)",
-            "UPDATE users SET age = 31 WHERE name = 'bob'",
-            "SELECT name, age FROM users",
-            "SELECT name FROM users",
-            "SELECT name FROM users WHERE age = 30",
-        ];
-        let mut results = Vec::new();
-        for query in queries {
-            results.push(db.query(query));
-        }
-
-        let expected_results = vec![
-            Ok(ReefDBResult::CreateTable),
-            Ok(ReefDBResult::Insert(1)),
-            Ok(ReefDBResult::Insert(2)),
-            Ok(ReefDBResult::Update(1)), // Updated 1 row (where name = 'bob')
-            Ok(ReefDBResult::Select(vec![
-                (
-                    0,
-                    vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)],
-                ),
-                (
-                    1,
-                    vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)],
-                ),
-            ])),
-            Ok(ReefDBResult::Select(vec![
-                (0, vec![DataValue::Text("alice".to_string())]),
-                (1, vec![DataValue::Text("bob".to_string())]),
-            ])),
-            Ok(ReefDBResult::Select(vec![(
-                0,
-                vec![DataValue::Text("alice".to_string())],
-            )])),
-        ];
-        assert_eq!(results, expected_results);
-
-        // Check if the users table has been created
-        assert!(db.tables.table_exists(&"users".to_string()));
-
-        // Get the users table and check the number of rows
-        let (_, users) = db.tables.get_table(&"users".to_string()).unwrap();
-        assert_eq!(users.len(), 2);
-
-        // Check the contents of the users table
-        assert_eq!(
-            users[0],
-            vec![DataValue::Text("alice".to_string()), DataValue::Integer(30)]
-        );
-        assert_eq!(
-            users[1],
-            vec![DataValue::Text("bob".to_string()), DataValue::Integer(31)]
-        );
-    }
-
-    #[test]
-    fn test_savepoints() {
-        use std::fs::{create_dir_all, remove_dir_all};
-        use std::path::Path;
-        use crate::sql::data_value::DataValue;
-        use crate::transaction::IsolationLevel;
-
-        // Create test directory with absolute path
-        let test_dir = Path::new("./test_db");
-        let _ = remove_dir_all(test_dir); // Clean up any previous test data
-        create_dir_all(test_dir).unwrap();
-
-        // Create subdirectories
-        let db_dir = test_dir.join("db");
-        let index_dir = test_dir.join("index");
-        create_dir_all(&db_dir).unwrap();
-        create_dir_all(&index_dir).unwrap();
-
-        let db_path = db_dir.join("test.db");
-        let index_path = index_dir.join("test.idx");
-
-        // Create database with transaction support
-        let mut db = OnDiskReefDB::create_on_disk(
-            db_path.to_string_lossy().to_string(),
-            index_path.to_string_lossy().to_string()
-        ).unwrap();
-
-        // Start a transaction for table creation
-        let tx_id = db.begin_transaction(IsolationLevel::ReadCommitted).unwrap();
-        
-        // Create table within the transaction
-        let create_result = db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)").unwrap();
-        assert!(matches!(create_result, ReefDBResult::CreateTable));
-        assert!(db.tables.table_exists("users"));
-        
-        // Commit the table creation transaction
-        db.commit_transaction(tx_id).unwrap();
-
-        // Start a new transaction for data manipulation
-        let tx_id = db.begin_transaction(IsolationLevel::ReadCommitted).unwrap();
-
-        // Insert initial data and create savepoints
-        db.query("INSERT INTO users VALUES (1, 'Alice')").unwrap();
-        db.query("SAVEPOINT sp1").unwrap();
-        db.query("INSERT INTO users VALUES (2, 'Bob')").unwrap();
-        db.query("SAVEPOINT sp2").unwrap();
-        db.query("INSERT INTO users VALUES (3, 'Charlie')").unwrap();
-
-        // Verify all data is present
-        let result = db.query("SELECT name FROM users ORDER BY id").unwrap();
-        match result {
-            ReefDBResult::Select(rows) => {
-                assert_eq!(rows.len(), 3);
-                assert_eq!(rows[0].1[0], DataValue::Text("Alice".to_string()));
-                assert_eq!(rows[1].1[0], DataValue::Text("Bob".to_string()));
-                assert_eq!(rows[2].1[0], DataValue::Text("Charlie".to_string()));
-            },
-            _ => panic!("Expected Select result"),
-        }
-
-        // Rollback to sp1 (should remove Bob and Charlie)
-        db.query("ROLLBACK TO SAVEPOINT sp1").unwrap();
-
-        // Verify only Alice remains
-        let result = db.query("SELECT name FROM users ORDER BY id").unwrap();
-        match result {
-            ReefDBResult::Select(rows) => {
-                assert_eq!(rows.len(), 1, "Expected only one row after rollback");
-                assert_eq!(rows[0].1[0], DataValue::Text("Alice".to_string()), "Expected only Alice to remain");
-            },
-            _ => panic!("Expected Select result"),
-        }
-
-        // Clean up
-        db.commit_transaction(tx_id).unwrap();
-        drop(db); // Ensure db is dropped before removing directory
-        let _ = remove_dir_all(test_dir); // Clean up test directory
-    }
-
-    fn print_table_state<S: Storage + Clone, FTS: Search + Clone>(db: &ReefDB<S, FTS>)
-    where
-        FTS::NewArgs: Clone,
-    {
-        if let Some(table) = db.tables.tables.get("users") {
-            println!("Table 'users' contents:");
-            for row in &table.data.1 {
-                println!("  {:?}", row);
-            }
-        } else {
-            println!("Table 'users' not found");
-        }
+    pub fn query(&mut self, sql: &str) -> Result<ReefDBResult, ReefDBError> {
+        use crate::sql::parser::Parser;
+        let stmt = Parser::parse_sql(sql)?;
+        self.execute_statement(stmt)
     }
 }
