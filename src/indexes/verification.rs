@@ -1,7 +1,12 @@
 use std::collections::{HashMap, HashSet};
+use crate::indexes::index_manager::{DefaultIndexManager, IndexManager};
 use crate::error::ReefDBError;
-use crate::indexes::index_manager::{IndexType, IndexManager};
 use crate::fts::tokenizers::tokenizer::Tokenizer;
+use crate::indexes::IndexType;
+use crate::indexes::gin::GinIndex;
+use crate::indexes::btree::BTreeIndex;
+use crate::fts::search::Search;
+use crate::fts::tokenizers::default::DefaultTokenizer;
 
 pub trait IndexVerification {
     fn verify_index_consistency(&self, table: &str, column: &str) -> Result<VerificationResult, ReefDBError>;
@@ -87,7 +92,6 @@ mod tests {
     use super::*;
     use crate::indexes::btree::BTreeIndex;
     use crate::indexes::gin::GinIndex;
-    use crate::indexes::DefaultIndexManager;
     use crate::fts::tokenizers::default::DefaultTokenizer;
     use crate::storage::memory::InMemoryStorage;
     use crate::fts::search::Search;

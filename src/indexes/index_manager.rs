@@ -47,6 +47,14 @@ pub struct IndexUpdate {
     pub new_value: Option<Vec<u8>>,
     pub row_id: usize,
     pub transaction_id: u64,
+    pub operation_type: IndexOperationType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IndexOperationType {
+    Insert,
+    Update,
+    Delete,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +62,7 @@ pub struct DefaultIndexManager {
     indexes: HashMap<String, HashMap<String, IndexType>>,
     pending_updates: HashMap<u64, Vec<IndexUpdate>>,
     active_transactions: HashSet<u64>,
+    undo_log: HashMap<u64, Vec<IndexUpdate>>,
 }
 
 impl DefaultIndexManager {
@@ -62,6 +71,7 @@ impl DefaultIndexManager {
             indexes: HashMap::new(),
             pending_updates: HashMap::new(),
             active_transactions: HashSet::new(),
+            undo_log: HashMap::new(),
         }
     }
 
@@ -69,6 +79,52 @@ impl DefaultIndexManager {
         self.indexes
             .get(table)
             .and_then(|table_indexes| table_indexes.get(column))
+    }
+
+    fn apply_update(&mut self, update: &IndexUpdate) -> Result<(), ReefDBError> {
+        match update.operation_type {
+            IndexOperationType::Insert => {
+                if let Some(new_value) = &update.new_value {
+                    self.update_index(
+                        &update.table_name,
+                        &update.column_name,
+                        Vec::new(),
+                        new_value.clone(),
+                        update.row_id,
+                    )?;
+                }
+            }
+            IndexOperationType::Update => {
+                if let (Some(old_value), Some(new_value)) = (&update.old_value, &update.new_value) {
+                    self.update_index(
+                        &update.table_name,
+                        &update.column_name,
+                        old_value.clone(),
+                        new_value.clone(),
+                        update.row_id,
+                    )?;
+                }
+            }
+            IndexOperationType::Delete => {
+                if let Some(old_value) = &update.old_value {
+                    self.update_index(
+                        &update.table_name,
+                        &update.column_name,
+                        old_value.clone(),
+                        Vec::new(),
+                        update.row_id,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn record_undo(&mut self, update: IndexUpdate) {
+        self.undo_log
+            .entry(update.transaction_id)
+            .or_insert_with(Vec::new)
+            .push(update);
     }
 }
 
@@ -121,33 +177,53 @@ impl IndexManager for DefaultIndexManager {
     }
 
     fn track_index_update(&mut self, update: IndexUpdate) -> Result<(), ReefDBError> {
+        // Record the transaction as active
         self.active_transactions.insert(update.transaction_id);
+
+        // Create an undo record before applying the update
+        let undo_update = IndexUpdate {
+            table_name: update.table_name.clone(),
+            column_name: update.column_name.clone(),
+            old_value: update.new_value.clone(),
+            new_value: update.old_value.clone(),
+            row_id: update.row_id,
+            transaction_id: update.transaction_id,
+            operation_type: match update.operation_type {
+                IndexOperationType::Insert => IndexOperationType::Delete,
+                IndexOperationType::Delete => IndexOperationType::Insert,
+                IndexOperationType::Update => IndexOperationType::Update,
+            },
+        };
+        self.record_undo(undo_update);
+
+        // Store the update in pending updates
         self.pending_updates
             .entry(update.transaction_id)
             .or_insert_with(Vec::new)
             .push(update.clone());
 
-        if let (Some(old_value), Some(new_value)) = (update.old_value, update.new_value) {
-            self.update_index(&update.table_name, &update.column_name, old_value, new_value, update.row_id)?;
-        }
-        
-        Ok(())
+        // Apply the update
+        self.apply_update(&update)
     }
 
     fn commit_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        // Remove transaction data
         self.pending_updates.remove(&transaction_id);
+        self.undo_log.remove(&transaction_id);
         self.active_transactions.remove(&transaction_id);
         Ok(())
     }
 
     fn rollback_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        if let Some(updates) = self.pending_updates.remove(&transaction_id) {
-            for update in updates.into_iter().rev() {
-                if let (Some(old_value), Some(new_value)) = (update.old_value, update.new_value) {
-                    self.update_index(&update.table_name, &update.column_name, new_value, old_value, update.row_id)?;
-                }
+        if let Some(undo_records) = self.undo_log.remove(&transaction_id) {
+            // Apply undo records in reverse order
+            for undo_update in undo_records.into_iter().rev() {
+                self.apply_update(&undo_update)?;
             }
         }
+
+        // Clean up transaction data
+        self.pending_updates.remove(&transaction_id);
         self.active_transactions.remove(&transaction_id);
         Ok(())
     }
@@ -321,6 +397,7 @@ mod tests {
             new_value: Some(vec![4, 5, 6]),
             row_id: 1,
             transaction_id: 1,
+            operation_type: IndexOperationType::Insert,
         };
         
         // Track and commit update
@@ -345,6 +422,7 @@ mod tests {
             new_value: Some(vec![4, 5, 6]),
             row_id: 1,
             transaction_id: 1,
+            operation_type: IndexOperationType::Insert,
         };
         
         // Track and rollback update
@@ -370,6 +448,7 @@ mod tests {
             new_value: Some(vec![7, 8, 9]),
             row_id: 1,
             transaction_id: 1,
+            operation_type: IndexOperationType::Insert,
         };
         
         // Create transaction 2 update
@@ -380,6 +459,7 @@ mod tests {
             new_value: Some(vec![10, 11, 12]),
             row_id: 2,
             transaction_id: 2,
+            operation_type: IndexOperationType::Insert,
         };
         
         // Track both updates

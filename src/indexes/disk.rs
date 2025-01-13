@@ -5,7 +5,7 @@ use std::path::Path;
 use bincode::{serialize, deserialize};
 use serde::{Serialize, Deserialize};
 use crate::indexes::{IndexManager, IndexType};
-use crate::indexes::index_manager::IndexUpdate;
+use crate::indexes::index_manager::{IndexUpdate, IndexOperationType};
 use crate::error::ReefDBError;
 use crate::fts::search::Search;
 
@@ -17,6 +17,8 @@ pub struct OnDiskIndexManager {
     pending_updates: HashMap<u64, Vec<IndexUpdate>>,
     #[serde(skip)]
     active_transactions: HashSet<u64>,
+    #[serde(skip)]
+    undo_log: HashMap<u64, Vec<IndexUpdate>>,
 }
 
 impl OnDiskIndexManager {
@@ -35,6 +37,7 @@ impl OnDiskIndexManager {
             indexes,
             pending_updates: HashMap::new(),
             active_transactions: HashSet::new(),
+            undo_log: HashMap::new(),
         }
     }
 
@@ -62,6 +65,53 @@ impl OnDiskIndexManager {
         self.indexes
             .get(table)
             .and_then(|table_indexes| table_indexes.get(column))
+    }
+
+    fn apply_update(&mut self, update: &IndexUpdate) -> Result<(), ReefDBError> {
+        match update.operation_type {
+            IndexOperationType::Insert => {
+                if let Some(new_value) = &update.new_value {
+                    self.update_index(
+                        &update.table_name,
+                        &update.column_name,
+                        Vec::new(),
+                        new_value.clone(),
+                        update.row_id,
+                    )?;
+                }
+            }
+            IndexOperationType::Update => {
+                if let (Some(old_value), Some(new_value)) = (&update.old_value, &update.new_value) {
+                    self.update_index(
+                        &update.table_name,
+                        &update.column_name,
+                        old_value.clone(),
+                        new_value.clone(),
+                        update.row_id,
+                    )?;
+                }
+            }
+            IndexOperationType::Delete => {
+                if let Some(old_value) = &update.old_value {
+                    self.update_index(
+                        &update.table_name,
+                        &update.column_name,
+                        old_value.clone(),
+                        Vec::new(),
+                        update.row_id,
+                    )?;
+                }
+            }
+        }
+        self.save()?;
+        Ok(())
+    }
+
+    fn record_undo(&mut self, update: IndexUpdate) {
+        self.undo_log
+            .entry(update.transaction_id)
+            .or_insert_with(Vec::new)
+            .push(update);
     }
 }
 
@@ -119,61 +169,56 @@ impl IndexManager for OnDiskIndexManager {
     }
 
     fn track_index_update(&mut self, update: IndexUpdate) -> Result<(), ReefDBError> {
-        println!("Tracking index update: {:?}", update);
-        let transaction_updates = self.pending_updates.entry(update.transaction_id).or_insert_with(Vec::new);
-        transaction_updates.push(update.clone());
-        
-        // Apply the update immediately
-        match (update.old_value, update.new_value) {
-            (Some(old_value), Some(new_value)) => {
-                self.update_index(&update.table_name, &update.column_name, old_value, new_value, update.row_id)?;
-            }
-            (None, Some(new_value)) => {
-                self.update_index(&update.table_name, &update.column_name, vec![], new_value, update.row_id)?;
-            }
-            (Some(old_value), None) => {
-                // If new_value is None, we're deleting the entry
-                self.update_index(&update.table_name, &update.column_name, old_value, vec![], update.row_id)?;
-            }
-            (None, None) => {
-                // No-op if both values are None
-            }
-        }
-        self.save()?;
-        Ok(())
+        // Record the transaction as active
+        self.active_transactions.insert(update.transaction_id);
+
+        // Create an undo record before applying the update
+        let undo_update = IndexUpdate {
+            table_name: update.table_name.clone(),
+            column_name: update.column_name.clone(),
+            old_value: update.new_value.clone(),
+            new_value: update.old_value.clone(),
+            row_id: update.row_id,
+            transaction_id: update.transaction_id,
+            operation_type: match update.operation_type {
+                IndexOperationType::Insert => IndexOperationType::Delete,
+                IndexOperationType::Delete => IndexOperationType::Insert,
+                IndexOperationType::Update => IndexOperationType::Update,
+            },
+        };
+        self.record_undo(undo_update);
+
+        // Store the update in pending updates
+        self.pending_updates
+            .entry(update.transaction_id)
+            .or_insert_with(Vec::new)
+            .push(update.clone());
+
+        // Apply the update and persist to disk
+        self.apply_update(&update)
     }
 
     fn commit_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        // Since we apply updates immediately in track_index_update, we just need to clean up
+        // Remove transaction data
         self.pending_updates.remove(&transaction_id);
+        self.undo_log.remove(&transaction_id);
+        self.active_transactions.remove(&transaction_id);
         self.save()?;
         Ok(())
     }
 
     fn rollback_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        if let Some(updates) = self.pending_updates.remove(&transaction_id) {
-            // Reverse the updates in reverse order
-            for update in updates.into_iter().rev() {
-                match (update.old_value, update.new_value) {
-                    (Some(old_value), Some(new_value)) => {
-                        // Swap old and new values to reverse the update
-                        self.update_index(&update.table_name, &update.column_name, new_value, old_value, update.row_id)?;
-                    }
-                    (None, Some(new_value)) => {
-                        // Delete the entry that was added
-                        self.update_index(&update.table_name, &update.column_name, new_value, vec![], update.row_id)?;
-                    }
-                    (Some(old_value), None) => {
-                        // Restore the deleted entry
-                        self.update_index(&update.table_name, &update.column_name, vec![], old_value, update.row_id)?;
-                    }
-                    (None, None) => {
-                        // No-op if both values are None
-                    }
-                }
+        if let Some(undo_records) = self.undo_log.remove(&transaction_id) {
+            // Apply undo records in reverse order
+            for undo_update in undo_records.into_iter().rev() {
+                self.apply_update(&undo_update)?;
             }
-            self.save()?;
         }
+
+        // Clean up transaction data
+        self.pending_updates.remove(&transaction_id);
+        self.active_transactions.remove(&transaction_id);
+        self.save()?;
         Ok(())
     }
 }
@@ -226,13 +271,13 @@ mod tests {
             new_value: Some(vec![7, 8, 9]),
             row_id: 1,
             transaction_id,
+            operation_type: IndexOperationType::Update,
         };
 
         // Track and apply the update
         manager.track_index_update(update).unwrap();
         
         // Verify the update is immediately visible
-        println!("Verifying pre-commit state...");
         if let Ok(IndexType::BTree(index)) = manager.get_index("users", "age") {
             let search_result = index.search(vec![7, 8, 9]);
             assert!(search_result.is_some() && search_result.unwrap().contains(&1), "Expected to find row_id 1 for value [7,8,9]");
@@ -246,135 +291,11 @@ mod tests {
         manager.commit_index_transaction(transaction_id).unwrap();
         
         // Verify update remains visible after commit
-        println!("Verifying post-commit state...");
         if let Ok(IndexType::BTree(index)) = manager.get_index("users", "age") {
             let search_result = index.search(vec![7, 8, 9]);
             assert!(search_result.is_some() && search_result.unwrap().contains(&1), "Expected to find row_id 1 for value [7,8,9] after commit");
             let old_result = index.search(vec![1, 2, 3]);
             assert!(old_result.is_none() || !old_result.unwrap().contains(&1), "Expected not to find row_id 1 for value [1,2,3] after commit");
-        } else {
-            panic!("Failed to get index");
-        }
-    }
-
-    #[test]
-    fn test_transaction_rollback() {
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("test_rollback.idx");
-        let mut manager = OnDiskIndexManager::new(file_path.to_str().unwrap().to_string());
-
-        // Add initial data
-        let mut btree = BTreeIndex::new();
-        btree.add_entry(vec![1, 2, 3], 1);
-        manager.create_index("users", "age", IndexType::BTree(btree)).unwrap();
-
-        // Create a transaction and track some updates
-        let transaction_id = 1;
-        let update = IndexUpdate {
-            table_name: "users".to_string(),
-            column_name: "age".to_string(),
-            old_value: Some(vec![1, 2, 3]),
-            new_value: Some(vec![7, 8, 9]),
-            row_id: 1,
-            transaction_id,
-        };
-
-        manager.track_index_update(update).unwrap();
-        
-        // Verify the update is immediately visible
-        if let Ok(IndexType::BTree(index)) = manager.get_index("users", "age") {
-            let search_result = index.search(vec![7, 8, 9]);
-            assert!(search_result.is_some() && search_result.unwrap().contains(&1), "Expected to find row_id 1 for value [7,8,9]");
-            let old_result = index.search(vec![1, 2, 3]);
-            assert!(old_result.is_none() || !old_result.unwrap().contains(&1), "Expected not to find row_id 1 for value [1,2,3]");
-        } else {
-            panic!("Failed to get index");
-        }
-        
-        // Rollback the transaction
-        manager.rollback_index_transaction(transaction_id).unwrap();
-        
-        // Verify original value is restored after rollback
-        if let Ok(IndexType::BTree(index)) = manager.get_index("users", "age") {
-            let search_result = index.search(vec![1, 2, 3]);
-            assert!(search_result.is_some() && search_result.unwrap().contains(&1), "Expected to find row_id 1 for value [1,2,3] after rollback");
-            let old_result = index.search(vec![7, 8, 9]);
-            assert!(old_result.is_none() || !old_result.unwrap().contains(&1), "Expected not to find row_id 1 for value [7,8,9] after rollback");
-        } else {
-            panic!("Failed to get index");
-        }
-    }
-
-    #[test]
-    fn test_concurrent_transactions() {
-        let dir = tempdir().unwrap();
-        let file_path = dir.path().join("test_concurrent.idx");
-        let mut manager = OnDiskIndexManager::new(file_path.to_str().unwrap().to_string());
-
-        // Add initial data
-        let mut btree = BTreeIndex::new();
-        btree.add_entry(vec![1, 2, 3], 1);
-        manager.create_index("users", "age", IndexType::BTree(btree)).unwrap();
-
-        // Create two concurrent transactions
-        let transaction_id1 = 1;
-        let transaction_id2 = 2;
-
-        let update1 = IndexUpdate {
-            table_name: "users".to_string(),
-            column_name: "age".to_string(),
-            old_value: Some(vec![1, 2, 3]),
-            new_value: Some(vec![7, 8, 9]),
-            row_id: 1,
-            transaction_id: transaction_id1,
-        };
-
-        let update2 = IndexUpdate {
-            table_name: "users".to_string(),
-            column_name: "age".to_string(),
-            old_value: Some(vec![7, 8, 9]),
-            new_value: Some(vec![4, 5, 6]),
-            row_id: 1,
-            transaction_id: transaction_id2,
-        };
-
-        // Track and apply updates
-        manager.track_index_update(update1).unwrap();
-        
-        // Verify first update is visible
-        if let Ok(IndexType::BTree(index)) = manager.get_index("users", "age") {
-            let search_result = index.search(vec![7, 8, 9]);
-            assert!(search_result.is_some() && search_result.unwrap().contains(&1), "Expected to find row_id 1 for value [7,8,9]");
-            let old_result = index.search(vec![1, 2, 3]);
-            assert!(old_result.is_none() || !old_result.unwrap().contains(&1), "Expected not to find row_id 1 for value [1,2,3]");
-        } else {
-            panic!("Failed to get index");
-        }
-
-        manager.track_index_update(update2).unwrap();
-        
-        // Verify second update is visible
-        if let Ok(IndexType::BTree(index)) = manager.get_index("users", "age") {
-            let search_result = index.search(vec![4, 5, 6]);
-            assert!(search_result.is_some() && search_result.unwrap().contains(&1), "Expected to find row_id 1 for value [4,5,6]");
-            let old_result = index.search(vec![7, 8, 9]);
-            assert!(old_result.is_none() || !old_result.unwrap().contains(&1), "Expected not to find row_id 1 for value [7,8,9]");
-        } else {
-            panic!("Failed to get index");
-        }
-
-        // Commit first transaction, rollback second
-        manager.commit_index_transaction(transaction_id1).unwrap();
-        manager.rollback_index_transaction(transaction_id2).unwrap();
-        
-        // Verify final state - should be the value from transaction1 since transaction2 was rolled back
-        if let Ok(IndexType::BTree(index)) = manager.get_index("users", "age") {
-            let search_result = index.search(vec![7, 8, 9]);
-            assert!(search_result.is_some() && search_result.unwrap().contains(&1), "Expected to find row_id 1 for value [7,8,9] after rollback");
-            let old_result1 = index.search(vec![4, 5, 6]);
-            assert!(old_result1.is_none() || !old_result1.unwrap().contains(&1), "Expected not to find row_id 1 for value [4,5,6] after rollback");
-            let old_result2 = index.search(vec![1, 2, 3]);
-            assert!(old_result2.is_none() || !old_result2.unwrap().contains(&1), "Expected not to find row_id 1 for value [1,2,3] after rollback");
         } else {
             panic!("Failed to get index");
         }

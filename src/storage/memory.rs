@@ -7,8 +7,7 @@ use crate::sql::data_value::DataValue;
 use crate::sql::data_type::DataType;
 use crate::error::ReefDBError;
 use crate::sql::constraints::constraint::Constraint;
-use crate::indexes::{IndexManager, DefaultIndexManager};
-use crate::indexes::index_manager::IndexUpdate;
+use crate::indexes::index_manager::{IndexManager, DefaultIndexManager, IndexUpdate};
 
 #[derive(Clone)]
 pub struct InMemoryStorage {
@@ -16,13 +15,19 @@ pub struct InMemoryStorage {
     index_manager: DefaultIndexManager,
 }
 
-impl Storage for InMemoryStorage {
-    type NewArgs = ();
-    fn new(_args: ()) -> Self {
+impl InMemoryStorage {
+    pub fn new() -> Self {
         InMemoryStorage {
             tables: HashMap::new(),
             index_manager: DefaultIndexManager::new(),
         }
+    }
+}
+
+impl Storage for InMemoryStorage {
+    type NewArgs = ();
+    fn new(_args: ()) -> Self {
+        Self::new()
     }
 
     fn insert_table(
@@ -260,7 +265,7 @@ mod tests {
     fn test() {
         use super::*;
         use crate::sql::column_def::ColumnDef;
-        let mut storage = InMemoryStorage::new(());
+        let mut storage = InMemoryStorage::new();
         let columns = vec![
             ColumnDef::new("id", DataType::Integer, vec![Constraint::PrimaryKey]),
             ColumnDef::new("name", DataType::Text, vec![]),

@@ -56,10 +56,17 @@ pub type OnDiskReefDB = ReefDB<storage::disk::OnDiskStorage, fts::default::Defau
 
 impl InMemoryReefDB {
     pub fn create_in_memory() -> Result<Self, ReefDBError> {
-        let mut db = ReefDB::<storage::memory::InMemoryStorage, fts::default::DefaultSearchIdx>::create_with_args(
-            storage::memory::InMemoryStorage::new(()),
-            Default::default(),
-        );
+        let mut db = ReefDB {
+            tables: TableStorage::new(),
+            inverted_index: fts::default::DefaultSearchIdx::new(),
+            storage: storage::memory::InMemoryStorage::new(),
+            transaction_manager: None,
+            data_dir: None,
+            autocommit: true,
+            autocommit_isolation_level: IsolationLevel::ReadCommitted,
+            mvcc_manager: Arc::new(Mutex::new(MVCCManager::new())),
+            current_transaction_id: None,
+        };
         db.transaction_manager = Some(TransactionManager::create(
             db.clone(),
             WriteAheadLog::new_in_memory()?,
