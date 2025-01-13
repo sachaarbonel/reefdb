@@ -91,10 +91,34 @@ impl<T: Tokenizer> GinIndex<T> {
     }
 
     pub fn add_column(&mut self, table: &str, column: &str) {
-        self.index
-            .entry(table.to_string())
+        self.index.entry(table.to_string())
             .or_insert_with(ColumnMap::default)
-            .entry(column.to_string());
+            .0.entry(column.to_string())
+            .or_insert_with(TokenMap::default);
+    }
+
+    // Add a method to directly insert raw bytes as a token (for testing purposes)
+    #[cfg(test)]
+    pub fn add_raw_token(&mut self, raw_bytes: &[u8], row_id: usize) {
+        let table = "test_table";
+        let column = "test_column";
+        
+        // Ensure the table and column exist
+        self.add_column(table, column);
+        
+        // Get the column map
+        if let Some(column_map) = self.index.get_mut(table) {
+            // Get the token map
+            if let Some(token_map) = column_map.0.get_mut(column) {
+                // Create a document map for this token
+                let doc_map = token_map.0
+                    .entry(unsafe { String::from_utf8_unchecked(raw_bytes.to_vec()) })
+                    .or_insert_with(DocumentMap::default);
+                
+                // Add the document ID with position 0
+                doc_map.insert(row_id, 0);
+            }
+        }
     }
 
     fn add_document(&mut self, table: &str, column: &str, row_id: usize, text: &str) {
@@ -330,6 +354,14 @@ impl<T: Tokenizer> GinIndex<T> {
             }
         }
         true
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Vec<u8>, HashSet<usize>)> + '_ {
+        self.index
+            .values()
+            .flat_map(|column_map| column_map.0.values())
+            .flat_map(|token_map| token_map.0.iter())
+            .map(|(token, doc_map)| (token.as_bytes().to_vec(), doc_map.doc_ids()))
     }
 }
 

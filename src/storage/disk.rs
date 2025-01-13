@@ -11,8 +11,163 @@ use std::path::Path;
 use super::Storage;
 use crate::error::ReefDBError;
 use crate::sql::constraints::constraint::Constraint;
-use crate::indexes::{IndexManager, IndexType, disk::OnDiskIndexManager};
+use crate::indexes::{IndexManager, IndexType};
 use crate::indexes::index_manager::IndexUpdate;
+use crate::fts::search::Search;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnDiskIndexManager {
+    file_path: String,
+    indexes: HashMap<String, HashMap<String, IndexType>>,
+    #[serde(skip)]
+    pending_updates: HashMap<u64, Vec<IndexUpdate>>,
+    #[serde(skip)]
+    active_transactions: std::collections::HashSet<u64>,
+}
+
+impl OnDiskIndexManager {
+    pub fn new(file_path: String) -> Self {
+        let index_file_path = format!("{}.index", file_path);
+        let indexes = if Path::new(&index_file_path).exists() {
+            match File::open(&index_file_path) {
+                Ok(mut file) => {
+                    let mut contents = Vec::new();
+                    if file.read_to_end(&mut contents).is_ok() {
+                        match deserialize(&contents) {
+                            Ok(loaded_manager) => {
+                                let OnDiskIndexManager { indexes, .. } = loaded_manager;
+                                indexes
+                            }
+                            Err(_) => HashMap::new(),
+                        }
+                    } else {
+                        HashMap::new()
+                    }
+                }
+                Err(_) => HashMap::new(),
+            }
+        } else {
+            HashMap::new()
+        };
+
+        OnDiskIndexManager {
+            file_path: index_file_path,
+            indexes,
+            pending_updates: HashMap::new(),
+            active_transactions: std::collections::HashSet::new(),
+        }
+    }
+
+    fn save(&self) -> Result<(), ReefDBError> {
+        let encoded_data = serialize(self)
+            .map_err(|e| ReefDBError::Other(format!("Serialization error: {}", e)))?;
+        let mut file = File::create(&self.file_path)
+            .map_err(|e| ReefDBError::IoError(e.to_string()))?;
+        file.write_all(&encoded_data)
+            .map_err(|e| ReefDBError::IoError(e.to_string()))?;
+        Ok(())
+    }
+}
+
+impl IndexManager for OnDiskIndexManager {
+    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType) -> Result<(), ReefDBError> {
+        let table_indexes = self.indexes.entry(table.to_string()).or_insert_with(HashMap::new);
+        table_indexes.insert(column.to_string(), index_type);
+        self.save()?;
+        Ok(())
+    }
+
+    fn drop_index(&mut self, table: &str, column: &str) {
+        if let Some(table_indexes) = self.indexes.get_mut(table) {
+            table_indexes.remove(column);
+            let _ = self.save();
+        }
+    }
+
+    fn get_index(&self, table: &str, column: &str) -> Result<&IndexType, ReefDBError> {
+        self.indexes
+            .get(table)
+            .ok_or_else(|| ReefDBError::TableNotFound(table.to_string()))?
+            .get(column)
+            .ok_or_else(|| ReefDBError::ColumnNotFound(column.to_string()))
+    }
+
+    fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize) -> Result<(), ReefDBError> {
+        let table_indexes = self.indexes.get_mut(table)
+            .ok_or_else(|| ReefDBError::TableNotFound(table.to_string()))?;
+        let index = table_indexes.get_mut(column)
+            .ok_or_else(|| ReefDBError::ColumnNotFound(column.to_string()))?;
+
+        match index {
+            IndexType::BTree(btree) => {
+                if !old_value.is_empty() {
+                    btree.remove_entry(old_value.clone(), row_id);
+                }
+                btree.add_entry(new_value, row_id);
+            }
+            IndexType::GIN(gin) => {
+                if !old_value.is_empty() {
+                    gin.remove_document(table, column, row_id);
+                }
+                if !new_value.is_empty() {
+                    gin.add_document(table, column, row_id, std::str::from_utf8(&new_value).unwrap_or_default());
+                }
+            }
+        }
+        self.save()?;
+        Ok(())
+    }
+
+    fn track_index_update(&mut self, update: IndexUpdate) -> Result<(), ReefDBError> {
+        let transaction_updates = self.pending_updates.entry(update.transaction_id).or_insert_with(Vec::new);
+        transaction_updates.push(update.clone());
+        self.active_transactions.insert(update.transaction_id);
+        
+        match (update.old_value, update.new_value) {
+            (Some(old_value), Some(new_value)) => {
+                self.update_index(&update.table_name, &update.column_name, old_value, new_value, update.row_id)?;
+            }
+            (None, Some(new_value)) => {
+                self.update_index(&update.table_name, &update.column_name, vec![], new_value, update.row_id)?;
+            }
+            (Some(old_value), None) => {
+                self.update_index(&update.table_name, &update.column_name, old_value, vec![], update.row_id)?;
+            }
+            (None, None) => {}
+        }
+        self.save()?;
+        Ok(())
+    }
+
+    fn commit_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        self.pending_updates.remove(&transaction_id);
+        self.active_transactions.remove(&transaction_id);
+        self.save()?;
+        Ok(())
+    }
+
+    fn rollback_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        if let Some(updates) = self.pending_updates.remove(&transaction_id) {
+            for update in updates.iter().rev() {
+                match (&update.old_value, &update.new_value) {
+                    (Some(old_value), Some(_)) => {
+                        self.update_index(&update.table_name, &update.column_name, vec![], old_value.clone(), update.row_id)?;
+                    }
+                    (None, Some(_)) => {
+                        self.update_index(&update.table_name, &update.column_name, vec![], vec![], update.row_id)?;
+                    }
+                    (Some(old_value), None) => {
+                        self.update_index(&update.table_name, &update.column_name, vec![], old_value.clone(), update.row_id)?;
+                    }
+                    (None, None) => {}
+                }
+            }
+        }
+        self.active_transactions.remove(&transaction_id);
+        self.save()?;
+        Ok(())
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct OnDiskStorage {
@@ -23,34 +178,39 @@ pub struct OnDiskStorage {
 
 impl OnDiskStorage {
     pub fn new(file_path: String) -> Self {
-        let path = Path::new(&file_path);
-        let index_path = format!("{}.idx", file_path);
-
-        let mut tables = HashMap::new();
-        if path.exists() {
-            let mut file = File::open(path).unwrap();
-            let mut buffer = Vec::new();
-            if file.read_to_end(&mut buffer).unwrap() > 0 {
-                tables = deserialize(&buffer).unwrap();
-            }
-        }
+        let tables = if Path::new(&file_path).exists() {
+            println!("Loading existing file: {}", file_path);
+            let mut file = File::open(&file_path).unwrap();
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents).unwrap();
+            println!("Read {} bytes", contents.len());
+            let tables = deserialize(&contents).unwrap_or_default();
+            println!("Loaded tables: {:?}", tables);
+            tables
+        } else {
+            println!("File does not exist: {}", file_path);
+            HashMap::new()
+        };
 
         OnDiskStorage {
-            file_path,
+            file_path: file_path.clone(),
             tables,
-            index_manager: OnDiskIndexManager::new(index_path),
+            index_manager: OnDiskIndexManager::new(file_path),
         }
     }
 
     pub fn save(&self) {
+        println!("Saving tables: {:?}", self.tables);
         let file = OpenOptions::new()
             .write(true)
             .create(true)
             .open(&self.file_path)
             .unwrap();
         let mut writer = BufWriter::new(file);
-        let buffer = serialize(&self.tables).unwrap();
-        writer.write_all(&buffer).unwrap();
+        let serialized = serialize(&self.tables).unwrap();
+        println!("Writing {} bytes", serialized.len());
+        writer.write_all(&serialized).unwrap();
+        writer.flush().unwrap();
     }
 
     pub fn sync(&self) -> std::io::Result<()> {
@@ -59,18 +219,21 @@ impl OnDiskStorage {
             .create(true)
             .open(&self.file_path)?;
         let mut writer = BufWriter::new(file);
-        let buffer = serialize(&self.tables).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        writer.write_all(&buffer)?;
+        let serialized = serialize(&self.tables).unwrap();
+        writer.write_all(&serialized)?;
         writer.flush()?;
-        writer.get_ref().sync_all()
+        Ok(())
     }
 }
+
+unsafe impl Send for OnDiskStorage {}
+unsafe impl Sync for OnDiskStorage {}
 
 impl Storage for OnDiskStorage {
     type NewArgs = String;
 
     fn new(args: Self::NewArgs) -> Self {
-        OnDiskStorage::new(args)
+        Self::new(args)
     }
 
     fn insert_table(
@@ -81,9 +244,7 @@ impl Storage for OnDiskStorage {
     ) {
         self.tables.insert(table_name, (columns, row));
         // Ensure changes are persisted to disk
-        self.sync().unwrap_or_else(|e| {
-            eprintln!("Failed to sync changes to disk: {}", e);
-        });
+        self.save();
     }
 
     fn get_table(

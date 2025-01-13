@@ -46,6 +46,10 @@ impl BTreeIndex {
         }
         results
     }
+
+    pub fn iter(&self) -> std::collections::btree_map::Iter<Vec<u8>, HashSet<usize>> {
+        self.index.iter()
+    }
 }
 
 #[cfg(test)]
