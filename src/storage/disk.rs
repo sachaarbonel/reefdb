@@ -12,6 +12,7 @@ use super::Storage;
 use crate::error::ReefDBError;
 use crate::sql::constraints::constraint::Constraint;
 use crate::indexes::{IndexManager, IndexType, disk::OnDiskIndexManager};
+use crate::indexes::index_manager::IndexUpdate;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct OnDiskStorage {
@@ -302,20 +303,32 @@ impl Storage for OnDiskStorage {
 }
 
 impl IndexManager for OnDiskStorage {
-    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType) {
-        self.index_manager.create_index(table, column, index_type);
+    fn create_index(&mut self, table: &str, column: &str, index_type: IndexType) -> Result<(), ReefDBError> {
+        self.index_manager.create_index(table, column, index_type)
     }
 
     fn drop_index(&mut self, table: &str, column: &str) {
-        self.index_manager.drop_index(table, column);
+        self.index_manager.drop_index(table, column)
     }
 
-    fn get_index(&self, table: &str, column: &str) -> Option<&IndexType> {
+    fn get_index(&self, table: &str, column: &str) -> Result<&IndexType, ReefDBError> {
         self.index_manager.get_index(table, column)
     }
 
-    fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize) {
-        self.index_manager.update_index(table, column, old_value, new_value, row_id);
+    fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize) -> Result<(), ReefDBError> {
+        self.index_manager.update_index(table, column, old_value, new_value, row_id)
+    }
+
+    fn track_index_update(&mut self, update: IndexUpdate) -> Result<(), ReefDBError> {
+        self.index_manager.track_index_update(update)
+    }
+
+    fn commit_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        self.index_manager.commit_index_transaction(transaction_id)
+    }
+
+    fn rollback_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        self.index_manager.rollback_index_transaction(transaction_id)
     }
 }
 

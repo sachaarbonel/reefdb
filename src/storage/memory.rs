@@ -8,6 +8,7 @@ use crate::sql::data_type::DataType;
 use crate::error::ReefDBError;
 use crate::sql::constraints::constraint::Constraint;
 use crate::indexes::{IndexManager, DefaultIndexManager};
+use crate::indexes::index_manager::IndexUpdate;
 
 #[derive(Clone)]
 pub struct InMemoryStorage {
@@ -221,32 +222,44 @@ impl Storage for InMemoryStorage {
 }
 
 impl IndexManager for InMemoryStorage {
-    fn create_index(&mut self, table: &str, column: &str, index_type: crate::indexes::IndexType) {
-        self.index_manager.create_index(table, column, index_type);
+    fn create_index(&mut self, table: &str, column: &str, index_type: crate::indexes::IndexType) -> Result<(), ReefDBError> {
+        self.index_manager.create_index(table, column, index_type)
     }
 
     fn drop_index(&mut self, table: &str, column: &str) {
-        self.index_manager.drop_index(table, column);
+        self.index_manager.drop_index(table, column)
     }
 
-    fn get_index(&self, table: &str, column: &str) -> Option<&crate::indexes::IndexType> {
+    fn get_index(&self, table: &str, column: &str) -> Result<&crate::indexes::IndexType, ReefDBError> {
         self.index_manager.get_index(table, column)
     }
 
-    fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize) {
-        self.index_manager.update_index(table, column, old_value, new_value, row_id);
+    fn update_index(&mut self, table: &str, column: &str, old_value: Vec<u8>, new_value: Vec<u8>, row_id: usize) -> Result<(), ReefDBError> {
+        self.index_manager.update_index(table, column, old_value, new_value, row_id)
+    }
+
+    fn track_index_update(&mut self, update: IndexUpdate) -> Result<(), ReefDBError> {
+        self.index_manager.track_index_update(update)
+    }
+
+    fn commit_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        self.index_manager.commit_index_transaction(transaction_id)
+    }
+
+    fn rollback_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
+        self.index_manager.rollback_index_transaction(transaction_id)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::sql::{constraints::constraint::Constraint, data_type::DataType};
+    use super::*;
+    use crate::sql::data_value::DataValue;
 
     #[test]
     fn test() {
         use super::*;
         use crate::sql::column_def::ColumnDef;
-        use crate::sql::data_value::DataValue;
         let mut storage = InMemoryStorage::new(());
         let columns = vec![
             ColumnDef::new("id", DataType::Integer, vec![Constraint::PrimaryKey]),

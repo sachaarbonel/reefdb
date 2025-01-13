@@ -32,7 +32,11 @@ impl BTreeIndex {
     }
 
     pub fn search(&self, value: Vec<u8>) -> Option<&HashSet<usize>> {
-        self.index.get(&value)
+        println!("BTreeIndex::search - Searching for value: {:?}", value);
+        println!("BTreeIndex::search - Current index contents: {:?}", self.index);
+        let result = self.index.get(&value);
+        println!("BTreeIndex::search - Found result: {:?}", result);
+        result
     }
 
     pub fn range_search(&self, start: Vec<u8>, end: Vec<u8>) -> HashSet<usize> {
