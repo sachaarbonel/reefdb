@@ -23,8 +23,9 @@ fn main() {
     
     // Full-text search
     db.query("CREATE TABLE books (title TEXT, description TSVECTOR)");
+    db.query("CREATE GIN INDEX ON books(description)");
     db.query("INSERT INTO books VALUES ('Book 1', 'A book about computer science')");
-    db.query("SELECT title FROM books WHERE description MATCH 'computer'");
+    db.query("SELECT title FROM books WHERE to_tsvector(description) @@ to_tsquery('computer')");
     
     // Joins
     db.query("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)");
@@ -60,7 +61,7 @@ fn main() {
 - ✅ Inverted index implementation
 - ✅ Basic tokenization
 - ✅ Memory and disk-based index storage
-- ✅ MATCH operator for text search
+- ✅ @@ operator for text search
 
 ### Transaction Support
 - ✅ Basic transaction structure
