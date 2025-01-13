@@ -53,6 +53,7 @@ pub mod tests;
 
 pub type InMemoryReefDB = ReefDB<storage::memory::InMemoryStorage, fts::default::DefaultSearchIdx>;
 pub type OnDiskReefDB = ReefDB<storage::disk::OnDiskStorage, fts::default::DefaultSearchIdx>;
+pub type MmapReefDB = ReefDB<storage::mmap::MmapStorage, fts::default::DefaultSearchIdx>;
 
 impl InMemoryReefDB {
     pub fn create_in_memory() -> Result<Self, ReefDBError> {

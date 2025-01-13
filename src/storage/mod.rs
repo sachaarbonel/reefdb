@@ -3,6 +3,7 @@ use crate::{sql::column_def::ColumnDef, sql::{data_value::DataValue, data_type::
 
 pub mod disk;
 pub mod memory;
+pub mod mmap;
 
 #[derive(Clone, Debug)]
 pub struct TableStorage {
@@ -263,3 +264,7 @@ impl Storage for TableStorage {
         &self.tables
     }
 }
+
+pub use disk::OnDiskStorage;
+pub use memory::InMemoryStorage;
+pub use mmap::MmapStorage;
