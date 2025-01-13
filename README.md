@@ -90,9 +90,9 @@ fn main() {
 
 #### Real-time Index Management
 - [x] Real-time index updates with ACID compliance
-- [ ] Index consistency verification
-- [ ] Atomic index operations
-- [ ] Index recovery mechanisms
+- [x] Index consistency verification
+- [x] Atomic index operations
+- [x] Index recovery mechanisms
 - [ ] Concurrent index access
 
 #### Query Processing Essentials

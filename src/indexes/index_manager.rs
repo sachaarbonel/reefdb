@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::fmt::Debug;
-use std::io::{Read, Write};
+use std::io::{Read, Write, BufWriter};
+use std::fs::{File, OpenOptions};
+use std::path::Path;
 use serde::{Serialize, Deserialize};
 use crate::fts::default::DefaultSearchIdx;
 use crate::fts::tokenizers::tokenizer::Tokenizer;
@@ -268,6 +270,154 @@ impl OnDiskIndexManager {
         writer.flush()?;
         Ok(())
     }
+
+    fn get_index_internal(&self, table: &str, column: &str) -> Option<&IndexType> {
+        self.indexes.get(table).and_then(|cols| cols.get(column))
+    }
+
+    fn get_index_internal_mut(&mut self, table: &str, column: &str) -> Option<&mut IndexType> {
+        self.indexes.get_mut(table).and_then(|cols| cols.get_mut(column))
+    }
+
+    fn apply_update(&mut self, update: &IndexUpdate) -> Result<(), ReefDBError> {
+        match update.operation_type {
+            IndexOperationType::Insert => {
+                if let Some(new_value) = &update.new_value {
+                    match self.get_index_internal_mut(&update.table_name, &update.column_name) {
+                        Some(IndexType::BTree(btree)) => {
+                            btree.add_entry(new_value.clone(), update.row_id);
+                        },
+                        Some(IndexType::GIN(gin)) => {
+                            gin.add_document(&update.table_name, &update.column_name, update.row_id, std::str::from_utf8(new_value).unwrap_or_default());
+                        },
+                        None => return Err(ReefDBError::Other("Index not found".to_string())),
+                    }
+                }
+            },
+            IndexOperationType::Update => {
+                if let (Some(old_value), Some(new_value)) = (&update.old_value, &update.new_value) {
+                    match self.get_index_internal_mut(&update.table_name, &update.column_name) {
+                        Some(IndexType::BTree(btree)) => {
+                            btree.remove_entry(old_value.clone(), update.row_id);
+                            btree.add_entry(new_value.clone(), update.row_id);
+                        },
+                        Some(IndexType::GIN(gin)) => {
+                            gin.remove_document(&update.table_name, &update.column_name, update.row_id);
+                            gin.add_document(&update.table_name, &update.column_name, update.row_id, std::str::from_utf8(new_value).unwrap_or_default());
+                        },
+                        None => return Err(ReefDBError::Other("Index not found".to_string())),
+                    }
+                }
+            },
+            IndexOperationType::Delete => {
+                if let Some(old_value) = &update.old_value {
+                    match self.get_index_internal_mut(&update.table_name, &update.column_name) {
+                        Some(IndexType::BTree(btree)) => {
+                            btree.remove_entry(old_value.clone(), update.row_id);
+                        },
+                        Some(IndexType::GIN(gin)) => {
+                            gin.remove_document(&update.table_name, &update.column_name, update.row_id);
+                        },
+                        None => return Err(ReefDBError::Other("Index not found".to_string())),
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn write_wal_entry(&self, entry: &IndexWALEntry) -> Result<(), ReefDBError> {
+        let wal_path = format!("{}.wal", self.index_path);
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&wal_path)
+            .map_err(|e| ReefDBError::IoError(e.to_string()))?;
+        
+        let mut writer = BufWriter::new(file);
+        bincode::serialize_into(&mut writer, entry)
+            .map_err(|e| ReefDBError::IoError(e.to_string()))?;
+        writer.flush().map_err(|e| ReefDBError::IoError(e.to_string()))?;
+        Ok(())
+    }
+
+    fn recover_from_wal(&mut self) -> Result<(), ReefDBError> {
+        let wal_path = format!("{}.wal", self.index_path);
+        if !Path::new(&wal_path).exists() {
+            return Ok(());
+        }
+
+        let mut file = File::open(&wal_path)
+            .map_err(|e| ReefDBError::IoError(e.to_string()))?;
+        
+        let mut active_txns: HashMap<u64, Vec<IndexUpdate>> = HashMap::new();
+        
+        loop {
+            match bincode::deserialize_from::<_, IndexWALEntry>(&mut file) {
+                Ok(entry) => {
+                    match entry.operation {
+                        IndexWALOperation::Begin => {
+                            active_txns.insert(entry.transaction_id, Vec::new());
+                        },
+                        IndexWALOperation::Update(update) => {
+                            if let Some(updates) = active_txns.get_mut(&entry.transaction_id) {
+                                updates.push(update);
+                            }
+                        },
+                        IndexWALOperation::Commit => {
+                            if let Some(updates) = active_txns.remove(&entry.transaction_id) {
+                                for update in updates {
+                                    self.apply_update(&update)?;
+                                }
+                            }
+                        },
+                        IndexWALOperation::Rollback => {
+                            active_txns.remove(&entry.transaction_id);
+                        }
+                    }
+                },
+                Err(_) => break, // End of file or corrupted entry
+            }
+        }
+
+        // Rollback any incomplete transactions
+        for (_txn_id, updates) in active_txns {
+            for update in updates.iter().rev() {
+                match update.operation_type {
+                    IndexOperationType::Insert => {
+                        if let Some(new_value) = &update.new_value {
+                            match self.get_index_internal_mut(&update.table_name, &update.column_name) {
+                                Some(IndexType::BTree(btree)) => {
+                                    btree.remove_entry(new_value.clone(), update.row_id);
+                                },
+                                Some(IndexType::GIN(gin)) => {
+                                    gin.remove_document(&update.table_name, &update.column_name, update.row_id);
+                                },
+                                None => return Err(ReefDBError::Other("Index not found".to_string())),
+                            }
+                        }
+                    },
+                    IndexOperationType::Update | IndexOperationType::Delete => {
+                        if let Some(old_value) = &update.old_value {
+                            match self.get_index_internal_mut(&update.table_name, &update.column_name) {
+                                Some(IndexType::BTree(btree)) => {
+                                    btree.add_entry(old_value.clone(), update.row_id);
+                                },
+                                Some(IndexType::GIN(gin)) => {
+                                    gin.add_document(&update.table_name, &update.column_name, update.row_id, std::str::from_utf8(old_value).unwrap_or_default());
+                                },
+                                None => return Err(ReefDBError::Other("Index not found".to_string())),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clear WAL after recovery
+        std::fs::remove_file(wal_path).map_err(|e| ReefDBError::IoError(e.to_string()))?;
+        Ok(())
+    }
 }
 
 impl IndexManager for OnDiskIndexManager {
@@ -322,43 +472,92 @@ impl IndexManager for OnDiskIndexManager {
     }
 
     fn track_index_update(&mut self, update: IndexUpdate) -> Result<(), ReefDBError> {
-        self.active_transactions.insert(update.transaction_id);
-        self.pending_updates
-            .entry(update.transaction_id)
-            .or_insert_with(Vec::new)
-            .push(update.clone());
-
-        if let (Some(old_value), Some(new_value)) = (update.old_value, update.new_value) {
-            self.update_index(&update.table_name, &update.column_name, old_value, new_value, update.row_id)?;
-        }
+        let wal_entry = IndexWALEntry {
+            transaction_id: update.transaction_id,
+            operation: IndexWALOperation::Update(update.clone()),
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+        self.write_wal_entry(&wal_entry)?;
         
+        if let Some(updates) = self.pending_updates.get_mut(&update.transaction_id) {
+            updates.push(update.clone());
+        } else {
+            let begin_entry = IndexWALEntry {
+                transaction_id: update.transaction_id,
+                operation: IndexWALOperation::Begin,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            };
+            self.write_wal_entry(&begin_entry)?;
+            self.pending_updates.insert(update.transaction_id, vec![update.clone()]);
+        }
+        self.active_transactions.insert(update.transaction_id);
         Ok(())
     }
 
     fn commit_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        self.pending_updates.remove(&transaction_id);
+        let commit_entry = IndexWALEntry {
+            transaction_id,
+            operation: IndexWALOperation::Commit,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+        self.write_wal_entry(&commit_entry)?;
+
+        if let Some(updates) = self.pending_updates.remove(&transaction_id) {
+            for update in updates {
+                self.apply_update(&update)?;
+            }
+        }
         self.active_transactions.remove(&transaction_id);
-        self.save().map_err(|e| ReefDBError::IoError(e.to_string()))?;
+        self.save()?;
         Ok(())
     }
 
     fn rollback_index_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        if let Some(updates) = self.pending_updates.remove(&transaction_id) {
-            for update in updates.into_iter().rev() {
-                if let (Some(old_value), Some(new_value)) = (update.old_value, update.new_value) {
-                    self.update_index(&update.table_name, &update.column_name, new_value, old_value, update.row_id)?;
-                }
-            }
-        }
+        let rollback_entry = IndexWALEntry {
+            transaction_id,
+            operation: IndexWALOperation::Rollback,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        };
+        self.write_wal_entry(&rollback_entry)?;
+
+        self.pending_updates.remove(&transaction_id);
         self.active_transactions.remove(&transaction_id);
-        self.save().map_err(|e| ReefDBError::IoError(e.to_string()))?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexWALEntry {
+    pub transaction_id: u64,
+    pub operation: IndexWALOperation,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IndexWALOperation {
+    Begin,
+    Update(IndexUpdate),
+    Commit,
+    Rollback,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_btree_index() {
@@ -469,5 +668,195 @@ mod tests {
         // Commit transaction 1, rollback transaction 2
         manager.commit_index_transaction(1).unwrap();
         manager.rollback_index_transaction(2).unwrap();
+    }
+
+    #[test]
+    fn test_index_recovery() {
+        let temp_dir = tempdir().unwrap();
+        let index_path = temp_dir.path().join("test_index").to_str().unwrap().to_string();
+        
+        // Create initial manager and add some data
+        {
+            let mut manager = OnDiskIndexManager::new(index_path.clone());
+            let mut btree = BTreeIndex::new();
+            btree.add_entry(vec![1, 2, 3], 1);
+            manager.create_index("test_table", "test_column", IndexType::BTree(btree)).unwrap();
+            
+            // Start a transaction
+            let update = IndexUpdate {
+                table_name: "test_table".to_string(),
+                column_name: "test_column".to_string(),
+                old_value: None,
+                new_value: Some(vec![4, 5, 6]),
+                row_id: 2,
+                transaction_id: 1,
+                operation_type: IndexOperationType::Insert,
+            };
+            
+            manager.track_index_update(update).unwrap();
+            // Don't commit - simulate crash
+        }
+
+        // Create new manager instance to test recovery
+        {
+            let mut manager = OnDiskIndexManager::new(index_path.clone());
+            manager.recover_from_wal().unwrap();
+            
+            // Verify the uncommitted transaction was rolled back
+            let index = manager.get_index("test_table", "test_column").unwrap();
+            match index {
+                IndexType::BTree(btree) => {
+                    assert!(btree.search(vec![1, 2, 3]).is_some()); // Initial entry exists
+                    assert!(btree.search(vec![4, 5, 6]).is_none()); // Uncommitted entry doesn't exist
+                },
+                _ => panic!("Expected BTree index"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_index_recovery_with_multiple_transactions() {
+        let temp_dir = tempdir().unwrap();
+        let index_path = temp_dir.path().join("test_index").to_str().unwrap().to_string();
+        
+        // Create initial manager and add some data
+        {
+            let mut manager = OnDiskIndexManager::new(index_path.clone());
+            let mut btree = BTreeIndex::new();
+            btree.add_entry(vec![1, 2, 3], 1);
+            manager.create_index("test_table", "test_column", IndexType::BTree(btree)).unwrap();
+            
+            // Transaction 1 - will be committed
+            let update1 = IndexUpdate {
+                table_name: "test_table".to_string(),
+                column_name: "test_column".to_string(),
+                old_value: None,
+                new_value: Some(vec![4, 5, 6]),
+                row_id: 2,
+                transaction_id: 1,
+                operation_type: IndexOperationType::Insert,
+            };
+            
+            // Transaction 2 - will be uncommitted
+            let update2 = IndexUpdate {
+                table_name: "test_table".to_string(),
+                column_name: "test_column".to_string(),
+                old_value: None,
+                new_value: Some(vec![7, 8, 9]),
+                row_id: 3,
+                transaction_id: 2,
+                operation_type: IndexOperationType::Insert,
+            };
+            
+            manager.track_index_update(update1.clone()).unwrap();
+            manager.commit_index_transaction(1).unwrap();
+            
+            manager.track_index_update(update2).unwrap();
+            // Don't commit transaction 2 - simulate crash
+        }
+
+        // Create new manager instance to test recovery
+        {
+            let mut manager = OnDiskIndexManager::new(index_path.clone());
+            manager.recover_from_wal().unwrap();
+            
+            // Verify the committed transaction persisted and uncommitted was rolled back
+            let index = manager.get_index("test_table", "test_column").unwrap();
+            match index {
+                IndexType::BTree(btree) => {
+                    assert!(btree.search(vec![1, 2, 3]).is_some()); // Initial entry exists
+                    assert!(btree.search(vec![4, 5, 6]).is_some()); // Committed entry exists
+                    assert!(btree.search(vec![7, 8, 9]).is_none()); // Uncommitted entry doesn't exist
+                },
+                _ => panic!("Expected BTree index"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_index_recovery_with_updates() {
+        let temp_dir = tempdir().unwrap();
+        let index_path = temp_dir.path().join("test_index").to_str().unwrap().to_string();
+        
+        // Create initial manager and add some data
+        {
+            let mut manager = OnDiskIndexManager::new(index_path.clone());
+            let mut btree = BTreeIndex::new();
+            btree.add_entry(vec![1, 2, 3], 1);
+            manager.create_index("test_table", "test_column", IndexType::BTree(btree)).unwrap();
+            
+            // Transaction 1 - Update value
+            let update = IndexUpdate {
+                table_name: "test_table".to_string(),
+                column_name: "test_column".to_string(),
+                old_value: Some(vec![1, 2, 3]),
+                new_value: Some(vec![4, 5, 6]),
+                row_id: 1,
+                transaction_id: 1,
+                operation_type: IndexOperationType::Update,
+            };
+            
+            manager.track_index_update(update).unwrap();
+            // Don't commit - simulate crash
+        }
+
+        // Create new manager instance to test recovery
+        {
+            let mut manager = OnDiskIndexManager::new(index_path.clone());
+            manager.recover_from_wal().unwrap();
+            
+            // Verify the update was rolled back
+            let index = manager.get_index("test_table", "test_column").unwrap();
+            match index {
+                IndexType::BTree(btree) => {
+                    assert!(btree.search(vec![1, 2, 3]).is_some()); // Original value restored
+                    assert!(btree.search(vec![4, 5, 6]).is_none()); // Updated value rolled back
+                },
+                _ => panic!("Expected BTree index"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_index_recovery_with_deletes() {
+        let temp_dir = tempdir().unwrap();
+        let index_path = temp_dir.path().join("test_index").to_str().unwrap().to_string();
+        
+        // Create initial manager and add some data
+        {
+            let mut manager = OnDiskIndexManager::new(index_path.clone());
+            let mut btree = BTreeIndex::new();
+            btree.add_entry(vec![1, 2, 3], 1);
+            manager.create_index("test_table", "test_column", IndexType::BTree(btree)).unwrap();
+            
+            // Transaction 1 - Delete value
+            let update = IndexUpdate {
+                table_name: "test_table".to_string(),
+                column_name: "test_column".to_string(),
+                old_value: Some(vec![1, 2, 3]),
+                new_value: None,
+                row_id: 1,
+                transaction_id: 1,
+                operation_type: IndexOperationType::Delete,
+            };
+            
+            manager.track_index_update(update).unwrap();
+            // Don't commit - simulate crash
+        }
+
+        // Create new manager instance to test recovery
+        {
+            let mut manager = OnDiskIndexManager::new(index_path.clone());
+            manager.recover_from_wal().unwrap();
+            
+            // Verify the delete was rolled back
+            let index = manager.get_index("test_table", "test_column").unwrap();
+            match index {
+                IndexType::BTree(btree) => {
+                    assert!(btree.search(vec![1, 2, 3]).is_some()); // Original value still exists
+                },
+                _ => panic!("Expected BTree index"),
+            }
+        }
     }
 } 
