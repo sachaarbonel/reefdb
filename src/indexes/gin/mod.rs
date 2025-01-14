@@ -14,6 +14,9 @@ use crate::fts::search::Search;
 use crate::fts::tokenizers::tokenizer::Tokenizer;
 use crate::fts::tokenizers::default::DefaultTokenizer;
 
+mod evaluator;
+use evaluator::QueryEvaluator;
+
 /// Stores positions of a token in a document
 type Positions = Vec<usize>;
 /// Maps document ID to token positions
@@ -31,6 +34,7 @@ pub struct GinIndex<T: Tokenizer> {
     index: HashMap<String, ColumnMap>,
     tokenizer: T,
     text_processor: DefaultTextProcessor,
+    evaluator: QueryEvaluator,
 }
 
 impl DocumentMap {
@@ -87,6 +91,7 @@ impl<T: Tokenizer> GinIndex<T> {
             index: HashMap::new(),
             tokenizer: T::new(),
             text_processor: DefaultTextProcessor::new(),
+            evaluator: QueryEvaluator::new(),
         }
     }
 
@@ -160,200 +165,13 @@ impl<T: Tokenizer> GinIndex<T> {
     pub fn search(&self, table: &str, column: &str, query: &str) -> HashSet<usize> {
         if let Some(table_entry) = self.index.get(table) {
             if let Some(column_entry) = table_entry.get(column) {
-                let processed = self.text_processor.process_query(query, Some("english"));
-                println!("Processed query tokens: {:?}", processed.tokens);
-                println!("Processed query operators: {:?}", processed.operators);
-                
-                if processed.tokens.is_empty() {
-                    return HashSet::new();
-                }
-
-                // If there's only one token and no operators, return all documents containing that token
-                if processed.tokens.len() == 1 && processed.operators.is_empty() {
-                    let token_text = processed.tokens[0].text.to_lowercase();
-                    println!("Single token search for: {}", token_text);
-                    return match column_entry.get(&token_text) {
-                        Some(doc_map) => doc_map.doc_ids(),
-                        None => HashSet::new(),
-                    };
-                }
-
-                // If there's only one operator and it's a phrase, handle it directly
-                if processed.operators.len() == 1 {
-                    if let QueryOperator::Phrase(ref tokens) = processed.operators[0] {
-                        let token_strings: Vec<String> = tokens.iter().map(|t| t.text.to_lowercase()).collect();
-                        println!("Phrase search for tokens: {:?}", token_strings);
-                        let mut result_set = HashSet::new();
-                        // Get all document IDs that contain the first token
-                        if let Some(doc_map) = column_entry.get(&token_strings[0]) {
-                            for &doc_id in doc_map.0.keys() {
-                                if self.check_phrase(column_entry, doc_id, &token_strings) {
-                                    result_set.insert(doc_id);
-                                }
-                            }
-                        }
-                        return result_set;
-                    }
-                }
-
-                let mut current_set: Option<HashSet<usize>> = None;
-
-                for (i, token) in processed.tokens.iter().enumerate() {
-                    let token_text = token.text.to_lowercase();
-                    println!("Processing token {}: {}", i, token_text);
-                    let token_results = match column_entry.get(&token_text) {
-                        Some(doc_map) => {
-                            let results = doc_map.doc_ids();
-                            println!("Documents containing '{}': {:?}", token_text, results);
-                            results
-                        },
-                        None => HashSet::new(),
-                    };
-
-                    let results = if token.type_ == TokenType::NotWord {
-                        let mut all_docs = HashSet::new();
-                        for doc_map in column_entry.0.values() {
-                            all_docs.extend(doc_map.doc_ids());
-                        }
-                        all_docs.difference(&token_results).cloned().collect()
-                    } else {
-                        token_results
-                    };
-
-                    if current_set.is_none() {
-                        current_set = Some(results);
-                        println!("Initial result set: {:?}", current_set);
-                        continue;
-                    }
-
-                    // Get the operator that should be applied before this token
-                    let op = if i > 0 && i - 1 < processed.operators.len() {
-                        processed.operators[i - 1].clone()
-                    } else {
-                        QueryOperator::And // Default to AND if no operator specified
-                    };
-                    println!("Applying operator: {:?}", op);
-
-                    let mut new_set = HashSet::new();
-                    match op {
-                        QueryOperator::And => {
-                            for id in current_set.as_ref().unwrap() {
-                                if results.contains(id) {
-                                    new_set.insert(*id);
-                                }
-                            }
-                            println!("After AND operation: {:?}", new_set);
-                        }
-                        QueryOperator::Or => {
-                            new_set.extend(current_set.as_ref().unwrap());
-                            new_set.extend(results);
-                            println!("After OR operation: {:?}", new_set);
-                        }
-                        QueryOperator::Not => {
-                            for id in current_set.as_ref().unwrap() {
-                                if !results.contains(id) {
-                                    new_set.insert(*id);
-                                }
-                            }
-                            println!("After NOT operation: {:?}", new_set);
-                        }
-                        QueryOperator::Phrase(ref tokens) => {
-                            let token_strings: Vec<String> = tokens.iter().map(|t| t.text.to_lowercase()).collect();
-                            println!("Checking phrase: {:?}", token_strings);
-                            for id in current_set.as_ref().unwrap() {
-                                if self.check_phrase(column_entry, *id, &token_strings) {
-                                    new_set.insert(*id);
-                                }
-                            }
-                            println!("After phrase check: {:?}", new_set);
-                        }
-                        QueryOperator::Proximity(ref tokens, distance) => {
-                            let token_strings: Vec<String> = tokens.iter().map(|t| t.text.to_lowercase()).collect();
-                            println!("Checking proximity for tokens: {:?} with distance {}", token_strings, distance);
-                            for id in current_set.as_ref().unwrap() {
-                                if self.check_proximity(column_entry, *id, &token_strings, distance) {
-                                    new_set.insert(*id);
-                                }
-                            }
-                            println!("After proximity check: {:?}", new_set);
-                        }
-                    }
-                    current_set = Some(new_set);
-                }
-
-                current_set.unwrap_or_default()
+                self.evaluator.evaluate(column_entry, query)
             } else {
                 HashSet::new()
             }
         } else {
             HashSet::new()
         }
-    }
-
-    fn check_phrase(&self, column_entry: &TokenMap, doc_id: usize, tokens: &[String]) -> bool {
-        if tokens.is_empty() {
-            return true;
-        }
-
-        let first_positions = match column_entry.get(&tokens[0]) {
-            Some(doc_map) => match doc_map.get(doc_id) {
-                Some(positions) => positions,
-                None => return false,
-            },
-            None => return false,
-        };
-
-        'outer: for &start_pos in first_positions {
-            for (i, token) in tokens.iter().skip(1).enumerate() {
-                let expected_pos = start_pos + i + 1;
-                match column_entry.get(token) {
-                    Some(doc_map) => match doc_map.get(doc_id) {
-                        Some(positions) => {
-                            if !positions.contains(&expected_pos) {
-                                continue 'outer;
-                            }
-                        }
-                        None => return false,
-                    },
-                    None => return false,
-                }
-            }
-            return true;
-        }
-        false
-    }
-
-    fn check_proximity(&self, column_entry: &TokenMap, doc_id: usize, tokens: &[String], max_distance: usize) -> bool {
-        if tokens.len() < 2 {
-            return true;
-        }
-
-        let mut all_positions: Vec<Vec<usize>> = Vec::new();
-        for token in tokens {
-            match column_entry.get(token) {
-                Some(doc_map) => match doc_map.get(doc_id) {
-                    Some(positions) => all_positions.push(positions.clone()),
-                    None => return false,
-                },
-                None => return false,
-            }
-        }
-
-        for &pos1 in &all_positions[0] {
-            for positions in all_positions.iter().skip(1) {
-                let mut found = false;
-                for &pos2 in positions {
-                    if pos1.abs_diff(pos2) <= max_distance {
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    return false;
-                }
-            }
-        }
-        true
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (Vec<u8>, HashSet<usize>)> + '_ {
