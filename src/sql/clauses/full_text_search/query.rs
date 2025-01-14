@@ -1,11 +1,11 @@
-use super::Language;
+use super::types::{Language, QueryType, ParseError};
+use super::operator::QueryOperator;
+use super::term::ParsedTerm;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum QueryType {
-    Plain,      // plainto_tsquery
-    Phrase,     // phraseto_tsquery
-    WebStyle,   // websearch_to_tsquery
-    Raw,        // to_tsquery
+pub struct ParsedTSQuery {
+    pub terms: Vec<ParsedTerm>,
+    pub operators: Vec<QueryOperator>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -13,25 +13,6 @@ pub struct TSQuery {
     pub text: String,
     pub query_type: QueryType,
     pub language: Option<Language>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum QueryOperator {
-    And,
-    Or,
-    Not,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedTerm {
-    pub text: String,
-    pub is_negated: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedTSQuery {
-    pub terms: Vec<ParsedTerm>,
-    pub operators: Vec<QueryOperator>,
 }
 
 impl TSQuery {
@@ -62,82 +43,64 @@ impl TSQuery {
         }
     }
 
+    fn handle_special_char(&self, c: char, current_term: &mut String, terms: &mut Vec<ParsedTerm>, operators: &mut Vec<QueryOperator>, is_negated: &mut bool) {
+        match c {
+            '&' => {
+                if let Some(term) = ParsedTerm::parse(current_term, *is_negated) {
+                    terms.push(term);
+                }
+                operators.push(QueryOperator::And);
+                current_term.clear();
+                *is_negated = false;
+            }
+            '|' => {
+                if let Some(term) = ParsedTerm::parse(current_term, *is_negated) {
+                    terms.push(term);
+                }
+                operators.push(QueryOperator::Or);
+                current_term.clear();
+                *is_negated = false;
+            }
+            '!' => {
+                *is_negated = true;
+            }
+            ' ' => {
+                if let Some(term) = ParsedTerm::parse(current_term, *is_negated) {
+                    terms.push(term);
+                } else if let Some(op) = QueryOperator::from_str(current_term) {
+                    operators.push(op);
+                }
+                current_term.clear();
+                *is_negated = false;
+            }
+            _ => {
+                current_term.push(c);
+            }
+        }
+    }
+
     pub fn parse(&self) -> ParsedTSQuery {
         let mut terms = Vec::new();
         let mut operators = Vec::new();
         let mut current_term = String::new();
         let mut is_negated = false;
-        let mut chars = self.text.chars().peekable();
 
-        while let Some(c) = chars.next() {
-            match c {
-                '!' => {
-                    is_negated = true;
-                }
-                ' ' => {
-                    if !current_term.is_empty() {
-                        let term = current_term.trim().to_string();
-                        match term.to_uppercase().as_str() {
-                            "AND" => {
-                                operators.push(QueryOperator::And);
-                            },
-                            "OR" => {
-                                operators.push(QueryOperator::Or);
-                            },
-                            _ => {
-                                terms.push(ParsedTerm {
-                                    text: term,
-                                    is_negated,
-                                });
-                                is_negated = false;
-                            }
-                        }
-                        current_term = String::new();
-                    }
-                }
-                '&' => {
-                    if !current_term.is_empty() {
-                        terms.push(ParsedTerm {
-                            text: current_term.trim().to_string(),
-                            is_negated,
-                        });
-                        current_term = String::new();
-                        is_negated = false;
-                    }
-                    operators.push(QueryOperator::And);
-                }
-                '|' => {
-                    if !current_term.is_empty() {
-                        terms.push(ParsedTerm {
-                            text: current_term.trim().to_string(),
-                            is_negated,
-                        });
-                        current_term = String::new();
-                        is_negated = false;
-                    }
-                    operators.push(QueryOperator::Or);
-                }
-                _ => {
-                    current_term.push(c);
-                }
-            }
+        // Handle empty query
+        if self.text.trim().is_empty() {
+            return ParsedTSQuery { terms: vec![], operators: vec![] };
         }
 
+        // Process each character
+        for c in self.text.chars() {
+            self.handle_special_char(c, &mut current_term, &mut terms, &mut operators, &mut is_negated);
+        }
+
+        // Handle the last term if any
         if !current_term.is_empty() {
-            let term = current_term.trim().to_string();
-            match term.to_uppercase().as_str() {
-                "AND" => {
-                    operators.push(QueryOperator::And);
-                },
-                "OR" => {
-                    operators.push(QueryOperator::Or);
-                },
-                _ => {
-                    terms.push(ParsedTerm {
-                        text: term,
-                        is_negated,
-                    });
-                }
+            if let Some(term) = ParsedTerm::parse(&current_term, is_negated) {
+                terms.push(term);
+            } else if let Some(op) = QueryOperator::from_str(&current_term) {
+                operators.push(op);
             }
         }
 
@@ -203,5 +166,38 @@ mod tests {
         assert!(parsed.terms[2].is_negated);
         assert_eq!(parsed.operators[0], QueryOperator::And);
         assert_eq!(parsed.operators[1], QueryOperator::Or);
+    }
+
+    #[test]
+    fn test_empty_query() {
+        let query = TSQuery::new("".to_string());
+        let parsed = query.parse();
+        assert!(parsed.terms.is_empty());
+        assert!(parsed.operators.is_empty());
+    }
+
+    #[test]
+    fn test_single_term() {
+        let query = TSQuery::new("hello".to_string());
+        let parsed = query.parse();
+        assert_eq!(parsed.terms.len(), 1);
+        assert_eq!(parsed.terms[0].text, "hello");
+        assert!(parsed.operators.is_empty());
+    }
+
+    #[test]
+    fn test_complex_query() {
+        let query = TSQuery::new("web AND development | !database & programming".to_string());
+        let parsed = query.parse();
+        assert_eq!(parsed.terms.len(), 4);
+        assert_eq!(parsed.operators.len(), 3);
+        assert_eq!(parsed.terms[0].text, "web");
+        assert_eq!(parsed.terms[1].text, "development");
+        assert_eq!(parsed.terms[2].text, "database");
+        assert!(parsed.terms[2].is_negated);
+        assert_eq!(parsed.terms[3].text, "programming");
+        assert_eq!(parsed.operators[0], QueryOperator::And);
+        assert_eq!(parsed.operators[1], QueryOperator::Or);
+        assert_eq!(parsed.operators[2], QueryOperator::And);
     }
 }

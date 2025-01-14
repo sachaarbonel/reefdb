@@ -1,10 +1,13 @@
-mod clause;
+pub mod operator;
 pub mod query;
-mod language;
-mod ranking;
+pub mod term;
+pub mod types;
+pub mod clause;
 pub mod weight;
 
+pub use operator::QueryOperator;
+pub use query::{TSQuery, ParsedTSQuery};
+pub use term::ParsedTerm;
+pub use types::{QueryType, Language, ParseError};
 pub use clause::FTSClause;
-pub use query::{TSQuery, QueryType};
-pub use language::Language;
-pub use ranking::TSRanking; 
+pub use weight::TextWeight; 

@@ -1,21 +1,19 @@
+use super::{Language, QueryType, TSQuery};
+use crate::sql::column::Column;
+use crate::sql::clauses::full_text_search::weight::TextWeight;
 use nom::{
     IResult,
     bytes::complete::{tag, tag_no_case, take_until},
-    character::complete::{multispace0, multispace1, anychar},
+    character::complete::{multispace0, anychar},
     sequence::{tuple, delimited},
     combinator::opt,
 };
-
-use crate::sql::column::Column;
 use crate::sql::operators::op::Op;
-use super::{Language, TSQuery, QueryType, TSRanking, weight::TextWeight};
-use crate::fts::text_processor::TsVector;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FTSClause {
     pub column: Column,
     pub query: TSQuery,
-    pub ranking: Option<TSRanking>,
     pub weight: Option<TextWeight>,
 }
 
@@ -31,7 +29,6 @@ impl FTSClause {
         Self {
             column,
             query: TSQuery::new(query_text).with_type(query_type),
-            ranking: None,
             weight: None,
         }
     }
@@ -43,11 +40,6 @@ impl FTSClause {
 
     pub fn with_query_type(mut self, query_type: QueryType) -> Self {
         self.query = self.query.with_type(query_type);
-        self
-    }
-
-    pub fn with_ranking(mut self, ranking: TSRanking) -> Self {
-        self.ranking = Some(ranking);
         self
     }
 

@@ -1,13 +1,11 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::any::Any;
 use super::{
     text_processor::{ProcessedQuery, Token, TokenType, TsVector, QueryOperator},
     language::{LanguageProcessor, english::EnglishProcessor, LanguageConfig},
 };
 use serde::{Serialize, Deserialize};
-use crate::sql::clauses::full_text_search::query::{TSQuery, QueryOperator as SqlQueryOperator, QueryType};
-use super::text_processor::QueryOperator as FtsQueryOperator;
+use crate::sql::clauses::full_text_search::{TSQuery, QueryOperator as SqlQueryOperator, QueryType};
 
 #[derive(Serialize, Deserialize)]
 struct SerializedProcessor {

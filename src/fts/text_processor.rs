@@ -3,6 +3,15 @@ use serde::{Deserialize, Serialize};
 use crate::sql::clauses::full_text_search::weight::TextWeight;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum QueryOperator {
+    And,
+    Or,
+    Not,
+    Phrase(Vec<Token>),
+    Proximity(Vec<Token>, usize),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Token {
     pub text: String,
     pub position: usize,
@@ -71,15 +80,6 @@ pub struct ProcessedDocument {
 pub struct ProcessedQuery {
     pub tokens: Vec<Token>,
     pub operators: Vec<QueryOperator>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum QueryOperator {
-    And,
-    Or,
-    Not,
-    Phrase(Vec<Token>),
-    Proximity(Vec<Token>, usize),
 }
 
 pub trait TextProcessor: Send + Sync {

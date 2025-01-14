@@ -1,9 +1,9 @@
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextWeight {
-    D = 0,
-    C = 1,
+    A = 1,
     B = 2,
-    A = 3,
+    C = 3,
+    D = 4,
 }
 
 impl TextWeight {
@@ -17,12 +17,12 @@ impl TextWeight {
         }
     }
 
-    pub fn to_f32(self) -> f32 {
+    pub fn to_f32(&self) -> f32 {
         match self {
-            TextWeight::D => 0.1,
-            TextWeight::C => 0.2,
-            TextWeight::B => 0.4,
             TextWeight::A => 1.0,
+            TextWeight::B => 0.4,
+            TextWeight::C => 0.2,
+            TextWeight::D => 0.1,
         }
     }
 }
