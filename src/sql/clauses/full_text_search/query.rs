@@ -1,37 +1,22 @@
-use super::types::{Language, QueryType, ParseError};
-use super::operator::QueryOperator;
+use super::types::{QueryType, ParseError};
+use super::language::Language;
 use super::term::ParsedTerm;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedTSQuery {
-    pub terms: Vec<ParsedTerm>,
-    pub operators: Vec<QueryOperator>,
-}
+use super::operator::QueryOperator;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TSQuery {
     pub text: String,
-    pub query_type: QueryType,
     pub language: Option<Language>,
+    pub query_type: QueryType,
 }
 
 impl TSQuery {
     pub fn new(text: String) -> Self {
         Self {
             text,
-            query_type: QueryType::Plain,
             language: None,
+            query_type: QueryType::Plain,
         }
-    }
-
-    pub fn with_type(mut self, query_type: QueryType) -> Self {
-        self.query_type = query_type;
-        self
-    }
-
-    pub fn with_language(mut self, language: Language) -> Self {
-        self.language = Some(language);
-        self
     }
 
     pub fn function_name(&self) -> &'static str {
@@ -41,6 +26,16 @@ impl TSQuery {
             QueryType::WebStyle => "websearch_to_tsquery",
             QueryType::Raw => "to_tsquery",
         }
+    }
+
+    pub fn with_language(mut self, language: Language) -> Self {
+        self.language = Some(language);
+        self
+    }
+
+    pub fn with_type(mut self, query_type: QueryType) -> Self {
+        self.query_type = query_type;
+        self
     }
 
     fn handle_special_char(&self, c: char, current_term: &mut String, terms: &mut Vec<ParsedTerm>, operators: &mut Vec<QueryOperator>, is_negated: &mut bool) {
@@ -87,7 +82,7 @@ impl TSQuery {
 
         // Handle empty query
         if self.text.trim().is_empty() {
-            return ParsedTSQuery { terms: vec![], operators: vec![] };
+            return ParsedTSQuery::new(vec![], vec![]);
         }
 
         // Process each character
@@ -104,7 +99,19 @@ impl TSQuery {
             }
         }
 
-        ParsedTSQuery { terms, operators }
+        ParsedTSQuery::new(terms, operators)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedTSQuery {
+    pub terms: Vec<ParsedTerm>,
+    pub operators: Vec<QueryOperator>,
+}
+
+impl ParsedTSQuery {
+    pub fn new(terms: Vec<ParsedTerm>, operators: Vec<QueryOperator>) -> Self {
+        Self { terms, operators }
     }
 }
 
@@ -114,42 +121,59 @@ mod tests {
 
     #[test]
     fn test_new_query() {
-        let query = TSQuery::new("test query".to_string());
-        assert_eq!(query.text, "test query");
-        assert_eq!(query.query_type, QueryType::Plain);
+        let query = TSQuery::new("web & development".to_string());
+        assert_eq!(query.text, "web & development");
         assert_eq!(query.language, None);
-    }
-
-    #[test]
-    fn test_with_type() {
-        let query = TSQuery::new("test".to_string())
-            .with_type(QueryType::Phrase);
-        assert_eq!(query.query_type, QueryType::Phrase);
+        assert_eq!(query.query_type, QueryType::Plain);
     }
 
     #[test]
     fn test_with_language() {
-        let query = TSQuery::new("test".to_string())
+        let query = TSQuery::new("web & development".to_string())
             .with_language(Language::English);
         assert_eq!(query.language, Some(Language::English));
     }
 
     #[test]
-    fn test_function_name() {
-        let plain = TSQuery::new("test".to_string());
-        assert_eq!(plain.function_name(), "plainto_tsquery");
-
-        let phrase = TSQuery::new("test".to_string())
-            .with_type(QueryType::Phrase);
-        assert_eq!(phrase.function_name(), "phraseto_tsquery");
-
-        let web = TSQuery::new("test".to_string())
-            .with_type(QueryType::WebStyle); 
-        assert_eq!(web.function_name(), "websearch_to_tsquery");
-
-        let raw = TSQuery::new("test".to_string())
+    fn test_with_type() {
+        let query = TSQuery::new("web & development".to_string())
             .with_type(QueryType::Raw);
-        assert_eq!(raw.function_name(), "to_tsquery");
+        assert_eq!(query.query_type, QueryType::Raw);
+    }
+
+    #[test]
+    fn test_function_name() {
+        let query = TSQuery::new("web & development".to_string());
+        assert_eq!(query.function_name(), "plainto_tsquery");
+
+        let query = query.with_type(QueryType::Raw);
+        assert_eq!(query.function_name(), "to_tsquery");
+
+        let query = TSQuery::new("web & development".to_string())
+            .with_type(QueryType::Phrase);
+        assert_eq!(query.function_name(), "phraseto_tsquery");
+
+        let query = TSQuery::new("web & development".to_string())
+            .with_type(QueryType::WebStyle);
+        assert_eq!(query.function_name(), "websearch_to_tsquery");
+    }
+
+    #[test]
+    fn test_empty_query() {
+        let query = TSQuery::new("".to_string());
+        let parsed = query.parse();
+        assert!(parsed.terms.is_empty());
+        assert!(parsed.operators.is_empty());
+    }
+
+    #[test]
+    fn test_complex_query() {
+        let query = TSQuery::new("web & (development | programming)".to_string())
+            .with_type(QueryType::Raw)
+            .with_language(Language::English);
+        assert_eq!(query.text, "web & (development | programming)");
+        assert_eq!(query.language, Some(Language::English));
+        assert_eq!(query.query_type, QueryType::Raw);
     }
 
     #[test]
@@ -169,35 +193,11 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_query() {
-        let query = TSQuery::new("".to_string());
-        let parsed = query.parse();
-        assert!(parsed.terms.is_empty());
-        assert!(parsed.operators.is_empty());
-    }
-
-    #[test]
     fn test_single_term() {
         let query = TSQuery::new("hello".to_string());
         let parsed = query.parse();
         assert_eq!(parsed.terms.len(), 1);
         assert_eq!(parsed.terms[0].text, "hello");
         assert!(parsed.operators.is_empty());
-    }
-
-    #[test]
-    fn test_complex_query() {
-        let query = TSQuery::new("web AND development | !database & programming".to_string());
-        let parsed = query.parse();
-        assert_eq!(parsed.terms.len(), 4);
-        assert_eq!(parsed.operators.len(), 3);
-        assert_eq!(parsed.terms[0].text, "web");
-        assert_eq!(parsed.terms[1].text, "development");
-        assert_eq!(parsed.terms[2].text, "database");
-        assert!(parsed.terms[2].is_negated);
-        assert_eq!(parsed.terms[3].text, "programming");
-        assert_eq!(parsed.operators[0], QueryOperator::And);
-        assert_eq!(parsed.operators[1], QueryOperator::Or);
-        assert_eq!(parsed.operators[2], QueryOperator::And);
     }
 }

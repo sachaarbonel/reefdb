@@ -1,10 +1,12 @@
-use super::{Language, QueryType, TSQuery};
+use super::{QueryType, TSQuery};
+use super::language::Language;
 use crate::sql::column::Column;
 use crate::sql::clauses::full_text_search::weight::TextWeight;
+use super::{set_weight::SetWeight, ts_vector::TSVector};
 use nom::{
     IResult,
     bytes::complete::{tag, tag_no_case, take_until},
-    character::complete::{multispace0, anychar},
+    character::complete::multispace0,
     sequence::{tuple, delimited},
     combinator::opt,
 };
@@ -48,91 +50,15 @@ impl FTSClause {
         self
     }
 
-    pub fn parse_setweight(input: &str) -> IResult<&str, Self> {
+    fn parse_tsquery(input: &str) -> IResult<&str, (Option<Language>, String)> {
         let (input, _) = tuple((
-            tag_no_case("setweight"),
-            multispace0,
-            tag("("),
-            multispace0,
-        ))(input)?;
-
-        // Parse inner tsvector
-        let (input, inner_clause) = Self::parse_tsvector(input)?;
-
-        let (input, _) = tuple((
-            tag(","),
-            multispace0,
-            tag("'"),
-        ))(input)?;
-
-        // Parse weight character
-        let (input, weight_char) = anychar(input)?;
-        let weight = TextWeight::from_char(weight_char)
-            .ok_or_else(|| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Char)))?;
-
-        let (input, _) = tuple((
-            tag("'"),
-            multispace0,
-            tag(")"),
-        ))(input)?;
-
-        Ok((input, inner_clause.with_weight(weight)))
-    }
-
-    pub fn parse_tsvector(input: &str) -> IResult<&str, Self> {
-        let (input, _) = tuple((
-            tag_no_case("to_tsvector"),
-            multispace0,
-            tag("("),
-        ))(input)?;
-
-        // Parse optional language parameter
-        let (input, language) = opt(tuple((
-            delimited(
-                tag("'"),
-                tag_no_case("english"),
-                tag("'"),
-            ),
-            tag(","),
-            multispace0,
-        )))(input)?;
-
-        // Parse column
-        let (input, column) = Column::parse(input)?;
-        let (input, _) = tag(")")(input)?;
-
-        let mut clause = FTSClause::new(column, String::new());
-        if language.is_some() {
-            clause = clause.with_language(Language::English);
-        }
-
-        Ok((input, clause))
-    }
-
-    pub fn parse(input: &str) -> IResult<&str, Self> {
-        // Try parsing setweight first
-        if let Ok((remaining, clause)) = Self::parse_setweight(input) {
-            return Ok((remaining, clause));
-        }
-
-        // If not setweight, parse as regular tsvector
-        let (input, clause) = Self::parse_tsvector(input)?;
-
-        let (input, _) = tuple((
-            multispace0,
-            |i| Op::parse(i).map(|(i, _)| (i, ())), // Parse @@ operator
-            multispace0,
             tag_no_case("to_tsquery"),
             tag("("),
         ))(input)?;
 
-        // Parse optional language for query
-        let (input, query_language) = opt(tuple((
-            delimited(
-                tag("'"),
-                tag_no_case("english"),
-                tag("'"),
-            ),
+        // Parse optional language
+        let (input, language) = opt(tuple((
+            Language::parse,
             tag(","),
             multispace0,
         )))(input)?;
@@ -146,11 +72,33 @@ impl FTSClause {
 
         let (input, _) = tag(")")(input)?;
 
-        let mut result = FTSClause::new(clause.column, query_text.to_string());
+        Ok((input, (language.map(|(lang, _, _)| lang), query_text.to_string())))
+    }
+
+    pub fn parse(input: &str) -> IResult<&str, Self> {
+        // Try parsing setweight first
+        if let Ok((remaining, clause)) = SetWeight::parse(input) {
+            return Ok((remaining, clause));
+        }
+
+        // Parse tsvector part
+        let (input, clause) = TSVector::parse(input)?;
+
+        // Parse @@ operator
+        let (input, _) = tuple((
+            multispace0,
+            |i| Op::parse(i).map(|(i, _)| (i, ())),
+            multispace0,
+        ))(input)?;
+
+        // Parse tsquery part
+        let (input, (query_language, query_text)) = Self::parse_tsquery(input)?;
+
+        let mut result = FTSClause::new(clause.column, query_text);
         
-        // Only set language if it was explicitly specified in either tsvector or tsquery
-        if query_language.is_some() || clause.query.language.is_some() {
-            result = result.with_language(Language::English);
+        // Set language if it was specified in either tsvector or tsquery
+        if let Some(lang) = query_language.or(clause.query.language) {
+            result = result.with_language(lang);
         }
 
         Ok((input, result))
@@ -190,14 +138,5 @@ mod tests {
         assert_eq!(clause.column.table, Some("posts".to_string()));
         assert_eq!(clause.query.text, "web & development");
         assert_eq!(clause.query.language, None);
-    }
-
-    #[test]
-    fn test_parse_setweight() {
-        let input = "setweight(to_tsvector('english', title), 'A')";
-        let (remaining, clause) = FTSClause::parse_setweight(input).unwrap();
-        assert_eq!(remaining, "");
-        assert_eq!(clause.column.name, "title");
-        assert_eq!(clause.weight, Some(TextWeight::A));
     }
 } 

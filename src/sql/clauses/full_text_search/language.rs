@@ -1,3 +1,9 @@
+use nom::{
+    IResult,
+    bytes::complete::{tag, tag_no_case},
+    sequence::delimited,
+};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Language {
     English,
@@ -20,6 +26,16 @@ impl Language {
             "simple" => Language::Simple,
             other => Language::Custom(other.to_string()),
         }
+    }
+
+    pub fn parse(input: &str) -> IResult<&str, Self> {
+        let (input, lang) = delimited(
+            tag("'"),
+            tag_no_case("english"),
+            tag("'"),
+        )(input)?;
+
+        Ok((input, Language::from_str(lang)))
     }
 }
 
@@ -52,5 +68,18 @@ mod tests {
     #[test]
     fn test_language_default() {
         assert_eq!(Language::default(), Language::English);
+    }
+
+    #[test]
+    fn test_language_parse() {
+        let input = "'english'";
+        let (remaining, lang) = Language::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        assert_eq!(lang, Language::English);
+
+        let input = "'ENGLISH'";
+        let (remaining, lang) = Language::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        assert_eq!(lang, Language::English);
     }
 }

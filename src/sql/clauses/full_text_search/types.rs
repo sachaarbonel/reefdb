@@ -6,18 +6,6 @@ pub enum QueryType {
     Raw,        // to_tsquery
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Language {
-    English,
-    // Add more languages as needed
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        Language::English
-    }
-}
-
 #[derive(Debug)]
 pub enum ParseError {
     EmptyQuery,
