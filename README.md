@@ -16,21 +16,33 @@ use reefdb::InMemoryReefDB;
 fn main() {
     let mut db = InMemoryReefDB::new();
 
-    // Basic SQL operations
-    db.query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)");
-    db.query("INSERT INTO users VALUES (1, 'Alice')");
-    db.query("SELECT * FROM users WHERE id = 1");
-    
-    // Full-text search
-    db.query("CREATE TABLE books (title TEXT, description TSVECTOR)");
-    db.query("CREATE GIN INDEX ON books(description)");
-    db.query("INSERT INTO books VALUES ('Book 1', 'A book about computer science')");
-    db.query("SELECT title FROM books WHERE to_tsvector(description) @@ to_tsquery('computer')");
-    
-    // Joins
-    db.query("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)");
-    db.query("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER)");
-    db.query("SELECT authors.name, books.title FROM authors INNER JOIN books ON authors.id = books.author_id");
+    // Create a table with various data types
+    db.query("CREATE TABLE records (
+        id INTEGER PRIMARY KEY,
+        name TEXT,
+        active BOOLEAN,
+        score FLOAT,
+        birth_date DATE,
+        last_login TIMESTAMP,
+        description TSVECTOR
+    )");
+
+    // Insert data with different types
+    db.query("INSERT INTO records VALUES (
+        1,
+        'Alice',
+        TRUE,
+        95.5,
+        '2000-01-01',
+        '2024-03-14 12:34:56',
+        'Software engineer with expertise in databases'
+    )");
+
+    // Query with type-specific operations
+    db.query("SELECT * FROM records WHERE score > 90.0");
+    db.query("SELECT * FROM records WHERE birth_date > '1999-12-31'");
+    db.query("SELECT * FROM records WHERE active = TRUE");
+    db.query("SELECT * FROM records WHERE to_tsvector(description) @@ to_tsquery('database')");
 }
 ```
 
@@ -55,6 +67,17 @@ fn main() {
 - ✅ INNER JOIN support
 - ✅ Primary key constraints
 - ✅ Basic error handling system
+- ✅ Rich data type support (INTEGER, TEXT, BOOLEAN, FLOAT, DATE, TIMESTAMP, NULL)
+
+### Data Types
+- ✅ INTEGER: Whole number values
+- ✅ TEXT: String values with support for escaped quotes
+- ✅ BOOLEAN: TRUE/FALSE values
+- ✅ FLOAT: Decimal number values
+- ✅ DATE: Date values in 'YYYY-MM-DD' format
+- ✅ TIMESTAMP: Datetime values in 'YYYY-MM-DD HH:MM:SS' format
+- ✅ NULL: Null values
+- ✅ TSVECTOR: Full-text search optimized text type
 
 ### Full-Text Search
 - ✅ TSVECTOR data type

@@ -97,6 +97,8 @@ fn parse_where_expression(input: &str) -> IResult<&str, WhereType> {
 
 fn parse_single_clause(input: &str) -> IResult<&str, WhereType> {
     alt((
+        // Parse regular clause first
+        map(WhereClause::parse, WhereType::Regular),
         // Parse parenthesized expression
         map(
             tuple((
@@ -110,8 +112,6 @@ fn parse_single_clause(input: &str) -> IResult<&str, WhereType> {
         ),
         // Parse FTS clause
         map(FTSClause::parse, WhereType::FTS),
-        // Parse regular clause
-        map(WhereClause::parse, WhereType::Regular),
     ))(input)
 }
 

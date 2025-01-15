@@ -1,4 +1,4 @@
-use nom::{branch::alt, bytes::complete::tag, combinator::map, IResult};
+use nom::{branch::alt, bytes::complete::{tag, tag_no_case}, combinator::map, IResult};
 use serde::{Deserialize, Serialize};
 
 use super::foreignkey::ForeignKeyConstraint;
@@ -15,9 +15,9 @@ pub enum Constraint {
 impl Constraint {
     pub fn parse(input: &str) -> IResult<&str, Constraint> {
         alt((
-            map(tag("NOT NULL"), |_| Constraint::NotNull),
-            map(tag("PRIMARY KEY"), |_| Constraint::PrimaryKey),
-            map(tag("UNIQUE"), |_| Constraint::Unique),
+            map(tag_no_case("NOT NULL"), |_| Constraint::NotNull),
+            map(tag_no_case("PRIMARY KEY"), |_| Constraint::PrimaryKey),
+            map(tag_no_case("UNIQUE"), |_| Constraint::Unique),
             ForeignKeyConstraint::parse,
         ))(input)
     }

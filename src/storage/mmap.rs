@@ -104,9 +104,14 @@ impl MmapStorage {
 
     fn get_default_value(data_type: &DataType) -> DataValue {
         match data_type {
-            DataType::Integer => DataValue::Integer(0),
             DataType::Text => DataValue::Text(String::new()),
+            DataType::Integer => DataValue::Integer(0),
             DataType::TSVector => DataValue::Text(String::new()),
+            DataType::Boolean => DataValue::Boolean(false),
+            DataType::Float => DataValue::Float(0.0),
+            DataType::Date => DataValue::Date(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
+            DataType::Timestamp => DataValue::Timestamp(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap()),
+            DataType::Null => DataValue::Null,
         }
     }
 }

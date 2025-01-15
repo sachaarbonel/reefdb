@@ -20,5 +20,6 @@ rand = "0.8"
 rust-stemmers = "1.2"
 lazy_static = "1.4"
 memmap2 = "0.5.10"
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]

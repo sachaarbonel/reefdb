@@ -78,24 +78,30 @@ fn parse_release_savepoint(input: &str) -> IResult<&str, Statement> {
 
 impl Statement {
     pub fn parse(input: &str) -> IResult<&str, Statement> {
-        preceded(
-            multispace0,
-            alt((
-                CreateStatement::parse,
-                InsertStatement::parse,
-                SelectStatement::parse,
-                UpdateStatement::parse,
-                DeleteStatement::parse,
-                AlterStatement::parse,
-                DropStatement::parse,
-                CreateIndexStatement::parse,
-                DropIndexStatement::parse,
-                parse_savepoint,
-                parse_rollback_to_savepoint,
-                parse_release_savepoint,
-                parse_begin_transaction,
-                parse_commit,
-            )),
-        )(input)
+        let (input, _) = multispace0(input)?;
+        let (input, stmt) = alt((
+            CreateStatement::parse,
+            InsertStatement::parse,
+            SelectStatement::parse,
+            UpdateStatement::parse,
+            DeleteStatement::parse,
+            AlterStatement::parse,
+            DropStatement::parse,
+            CreateIndexStatement::parse,
+            DropIndexStatement::parse,
+            parse_savepoint,
+            parse_rollback_to_savepoint,
+            parse_release_savepoint,
+            parse_begin_transaction,
+            parse_commit,
+        ))(input)?;
+        let (input, _) = multispace0(input)?;
+        if !input.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Eof
+            )));
+        }
+        Ok((input, stmt))
     }
 }

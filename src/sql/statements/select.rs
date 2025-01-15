@@ -39,6 +39,14 @@ impl SelectStatement {
         let (input, _) = opt(multispace1)(input)?;
         let (input, where_clause) = opt(parse_where_clause)(input)?;
 
+        let (input, _) = multispace0(input)?;
+        if !input.is_empty() {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Eof
+            )));
+        }
+
         Ok((
             input,
             Statement::Select(SelectStatement::FromTable(

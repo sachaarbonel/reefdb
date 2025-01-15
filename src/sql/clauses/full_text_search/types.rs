@@ -11,4 +11,5 @@ pub enum ParseError {
     EmptyQuery,
     UnmatchedNegation,
     InvalidOperator(String),
+    InvalidSyntax(String),
 } 

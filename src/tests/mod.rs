@@ -13,7 +13,7 @@ pub mod mvcc_integration_tests;
 pub mod join_integration_tests;
 pub mod fts_tests;
 pub mod mmap_tests;
-
+pub mod data_types;
 use crate::sql::{
     column_def::ColumnDef,
     data_type::DataType,

@@ -1,6 +1,6 @@
 use nom::{
     branch::alt,
-    bytes::complete::tag,
+    bytes::complete::{tag, tag_no_case},
     character::complete::{alpha1, alphanumeric1, multispace1},
     combinator::{opt, recognize},
     multi::{many0, separated_list0},

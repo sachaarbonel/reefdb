@@ -1,7 +1,7 @@
-use crate::sql::column_def::ColumnDef;
+use crate::sql::column_def::{ColumnDef, table_name};
 use nom::{
-    bytes::complete::tag,
-    character::complete::{alphanumeric1, multispace0, multispace1},
+    bytes::complete::{tag, tag_no_case},
+    character::complete::{multispace0, multispace1},
     multi::separated_list1,
     sequence::{delimited, tuple, terminated},
     combinator::opt,
@@ -17,17 +17,17 @@ pub enum CreateStatement {
 
 impl CreateStatement {
     pub fn parse(input: &str) -> IResult<&str, Statement> {
-        let (input, _) = tag("CREATE TABLE")(input)?;
+        let (input, _) = tag_no_case("CREATE TABLE")(input)?;
         let (input, _) = multispace1(input)?;
-        let (input, table_name) = alphanumeric1(input)?;
+        let (input, table_name) = table_name(input)?;
         let (input, _) = multispace0(input)?;
         let (input, columns) = delimited(
-            tag("("),
+            tag_no_case("("),
             separated_list1(
-                tuple((multispace0, tag(","), multispace0)),
+                tuple((multispace0, tag_no_case(","), multispace0)),
                 ColumnDef::parse
             ),
-            tuple((multispace0, opt(tuple((tag(","), multispace0))), tag(")"))),
+            tuple((multispace0, opt(tuple((tag_no_case(","), multispace0))), tag_no_case(")"))),
         )(input)?;
 
         Ok((

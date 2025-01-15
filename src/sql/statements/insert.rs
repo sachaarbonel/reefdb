@@ -1,7 +1,8 @@
 use crate::sql::data_value::DataValue;
+use crate::sql::column_def::table_name;
 
 use nom::{
-    bytes::complete::tag,
+    bytes::complete::{tag, tag_no_case},
     character::complete::{alphanumeric1, multispace0, multispace1},
     multi::separated_list0,
     sequence::{delimited, tuple},
@@ -18,9 +19,9 @@ pub enum InsertStatement {
 
 impl InsertStatement {
     pub fn parse(input: &str) -> IResult<&str, Statement> {
-        let (input, _) = tag("INSERT INTO")(input)?;
+        let (input, _) = tag_no_case("INSERT INTO")(input)?;
         let (input, _) = multispace1(input)?;
-        let (input, table_name) = alphanumeric1(input)?;
+        let (input, table_name) = table_name(input)?;
         let (input, _) = multispace0(input)?;
         
         // Optional column names
@@ -36,7 +37,7 @@ impl InsertStatement {
         )))(input)?;
         
         let (input, _) = multispace0(input)?;
-        let (input, _) = tag("VALUES")(input)?;
+        let (input, _) = tag_no_case("VALUES")(input)?;
         let (input, _) = multispace0(input)?;
         let (input, values) = delimited(
             tag("("),
