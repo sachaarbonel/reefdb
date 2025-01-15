@@ -1,4 +1,5 @@
-use super::{FTSClause, Language};
+use crate::sql::clauses::full_text_search::clause::FTSClause;
+use crate::sql::clauses::full_text_search::language::Language;
 use crate::sql::column::Column;
 use nom::{
     IResult,

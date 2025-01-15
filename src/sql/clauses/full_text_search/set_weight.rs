@@ -1,4 +1,6 @@
-use super::{FTSClause, TextWeight, TSVector};
+use crate::sql::clauses::full_text_search::clause::FTSClause;
+use crate::sql::clauses::full_text_search::weight::TextWeight;
+use crate::sql::clauses::full_text_search::ts_vector::TSVector;
 use nom::{
     IResult,
     bytes::complete::{tag, tag_no_case},

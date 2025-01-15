@@ -610,7 +610,6 @@ impl Default for TfIdfRanking {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexes::fts::text_processor::{TokenType, QueryOperator};
 
     fn create_test_vector(texts: &[&str]) -> TsVector {
         let tokens: Vec<Token> = texts.iter().enumerate()

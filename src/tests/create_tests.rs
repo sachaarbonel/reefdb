@@ -1,12 +1,7 @@
 use crate::{
-    error::ReefDBError,
-    result::ReefDBResult,
-    InMemoryReefDB,
-    transaction::IsolationLevel,
-    sql::{
+    error::ReefDBError, result::ReefDBResult, sql::{
         clauses::{
-            wheres::where_type::WhereType,
-            full_text_search::{FTSClause, TSQuery, QueryType, Language},
+            full_text_search::{ Language, QueryType, TSQuery}, wheres::where_type::WhereType, FTSClause
         },
         column::Column,
         column_def::ColumnDef,
@@ -17,7 +12,7 @@ use crate::{
         data_type::DataType,
         data_value::DataValue,
         statements::{create::CreateStatement, insert::InsertStatement, select::SelectStatement, Statement},
-    },
+    }, transaction::IsolationLevel, InMemoryReefDB
 };
 
 #[test]

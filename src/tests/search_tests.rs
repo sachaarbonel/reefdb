@@ -5,7 +5,7 @@ use crate::{
     sql::{
         clauses::{
             wheres::where_type::WhereType,
-            full_text_search::{FTSClause, TSQuery, QueryType, Language},
+            full_text_search::{clause::FTSClause, TSQuery, QueryType, Language},
         },
         column::Column,
         column_def::ColumnDef,

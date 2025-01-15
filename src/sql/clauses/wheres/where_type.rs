@@ -12,7 +12,7 @@ use crate::sql::{
     data_value::DataValue,
     operators::op::Op,
     clauses::full_text_search::{
-        FTSClause,
+        clause::FTSClause,
         TSQuery,
         QueryType,
         Language,
