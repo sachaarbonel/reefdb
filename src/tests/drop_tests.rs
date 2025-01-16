@@ -1,6 +1,7 @@
 use super::*;
 use crate::error::ReefDBError;
 use crate::result::ReefDBResult;
+use crate::sql::clauses::join_clause::TableReference;
 use crate::InMemoryReefDB;
 use crate::transaction::IsolationLevel;
 use crate::sql::statements::drop::DropStatement;
@@ -34,7 +35,10 @@ fn test_drop_table() {
 
     // Verify the table is gone by trying to select from it
     let stmt = Statement::Select(SelectStatement::FromTable(
-        "users".to_string(),
+        TableReference {
+            name: "users".to_string(),
+            alias: None,
+        },
         vec![Column { name: "*".to_string(), table: None }],
         None,
         vec![],

@@ -1,7 +1,7 @@
 use crate::{
     error::ReefDBError, result::ReefDBResult, sql::{
         clauses::{
-            full_text_search::{ Language, QueryType, TSQuery}, wheres::where_type::WhereType, FTSClause
+            full_text_search::{ Language, QueryType, TSQuery}, join_clause::TableReference, wheres::where_type::WhereType, FTSClause
         },
         column::Column,
         column_def::ColumnDef,
@@ -33,7 +33,10 @@ fn test_create_statement() -> Result<(), ReefDBError> {
 
     // Test 2: Verify table exists and has correct schema
     let select_stmt = SelectStatement::FromTable(
-        "users".to_string(),
+        TableReference {
+            name: "users".to_string(),
+            alias: None,
+        },
         vec![Column { name: "*".to_string(), table: None }],
         None,
         vec![],
@@ -125,7 +128,10 @@ fn test_create_statement() -> Result<(), ReefDBError> {
         .with_query_type(QueryType::Plain));
 
     let select_stmt = SelectStatement::FromTable(
-        "articles".to_string(),
+        TableReference {
+            name: "articles".to_string(),
+            alias: None,
+        },
         vec![Column { name: "*".to_string(), table: None }],
         Some(where_clause),
         vec![],

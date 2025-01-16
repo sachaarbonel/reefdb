@@ -1,6 +1,7 @@
 use super::*;
 use crate::error::ReefDBError;
 use crate::result::ReefDBResult;
+use crate::sql::clauses::join_clause::TableReference;
 use crate::InMemoryReefDB;
 
 #[test]
@@ -28,7 +29,10 @@ fn test_insert_statement() -> Result<(), ReefDBError> {
 
     // Test 3: Verify the inserted row
     let select_stmt = SelectStatement::FromTable(
-        "users".to_string(),
+        TableReference {
+            name: "users".to_string(),
+            alias: None,
+        },
         vec![Column { name: "*".to_string(), table: None }],
         None,
         vec![],
@@ -90,7 +94,10 @@ fn test_insert_statement() -> Result<(), ReefDBError> {
 
     // Test 8: Verify all inserted rows
     let select_stmt = SelectStatement::FromTable(
-        "users".to_string(),
+        TableReference {
+            name: "users".to_string(),
+            alias: None,
+        },
         vec![Column { name: "*".to_string(), table: None }],
         None,
         vec![],

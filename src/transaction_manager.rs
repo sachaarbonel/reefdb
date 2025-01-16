@@ -427,7 +427,7 @@ where
 
     pub fn execute_statement(&mut self, transaction_id: u64, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
         match stmt {
-            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, joins)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins)) => {
                 // First get the transaction guard and storage data
                 let guard = self.get_transaction_guard(transaction_id)?;
 
@@ -438,8 +438,8 @@ where
                 }
 
                 // Get table data and clone what we need
-                let table_data = guard.transaction.reef_db.storage.get_table_ref(&table_name)
-                    .ok_or_else(|| ReefDBError::TableNotFound(table_name.clone()))?;
+                let table_data = guard.transaction.reef_db.storage.get_table_ref(&table_ref.name)
+                    .ok_or_else(|| ReefDBError::TableNotFound(table_ref.name.clone()))?;
                 let schema = table_data.0.to_vec();
                 let rows = table_data.1.to_vec();
                 let current_isolation_level = guard.isolation_level.clone();
@@ -447,8 +447,8 @@ where
                 // Get all joined table data upfront
                 let mut joined_tables = Vec::new();
                 for join in joins.iter() {
-                    let joined_table = guard.transaction.reef_db.storage.get_table_ref(&join.table_name)
-                        .ok_or_else(|| ReefDBError::TableNotFound(join.table_name.clone()))?;
+                    let joined_table = guard.transaction.reef_db.storage.get_table_ref(&join.table_ref.name)
+                        .ok_or_else(|| ReefDBError::TableNotFound(join.table_ref.name.clone()))?;
                     joined_tables.push((join, (joined_table.0.to_vec(), joined_table.1.to_vec())));
                 }
 
@@ -468,7 +468,7 @@ where
                         DataValue::Integer(n) => n.to_string(),
                         _ => continue,
                     };
-                    let key = KeyFormat::row(&table_name, 0, &id);
+                    let key = KeyFormat::row(&table_ref.name, 0, &id);
                     
                     // Read MVCC data - use read_committed to ensure we see committed changes
                     let data = if current_isolation_level == IsolationLevel::ReadCommitted {
@@ -503,8 +503,8 @@ where
                                     &curr_schema,
                                     joined_row,
                                     joined_schema,
-                                    &table_name,
-                                    &join.table_name,
+                                    &table_ref.name,
+                                    &join.table_ref.name,
                                 );
                                 
                                 if should_join {
@@ -522,13 +522,13 @@ where
                                                 // Find the column in the schema
                                                 let col_idx = if let Some(ref clause_table) = clause.table {
                                                     // If table is specified, find the correct schema section
-                                                    let (schema_start, schema_len) = if clause_table == &table_name {
+                                                    let (schema_start, schema_len) = if clause_table == &table_ref.name {
                                                         (0, schema.len())
                                                     } else {
                                                         let mut start = schema.len();
                                                         let mut len = 0;
                                                         for (join_info, (join_schema, _)) in &joined_tables {
-                                                            if &join_info.table_name == clause_table {
+                                                            if &join_info.table_ref.name == clause_table {
                                                                 len = join_schema.len();
                                                                 break;
                                                             }
@@ -557,12 +557,12 @@ where
                                                 }
                                             },
                                             WhereType::And(left, right) => {
-                                                result = Self::evaluate_where_clause(left, &combined_row, &combined_schema, &table_name) &&
-                                                        Self::evaluate_where_clause(right, &combined_row, &combined_schema, &table_name);
+                                                result = Self::evaluate_where_clause(left, &combined_row, &combined_schema, &table_ref.name) &&
+                                                        Self::evaluate_where_clause(right, &combined_row, &combined_schema, &table_ref.name);
                                             },
                                             WhereType::Or(left, right) => {
-                                                result = Self::evaluate_where_clause(left, &combined_row, &combined_schema, &table_name) ||
-                                                        Self::evaluate_where_clause(right, &combined_row, &combined_schema, &table_name);
+                                                result = Self::evaluate_where_clause(left, &combined_row, &combined_schema, &table_ref.name) ||
+                                                        Self::evaluate_where_clause(right, &combined_row, &combined_schema, &table_ref.name);
                                             },
                                             WhereType::FTS(_) => {
                                                 result = false;
@@ -592,13 +592,13 @@ where
                             for col in &columns {
                                 let col_value = if let Some(table) = &col.table {
                                     // Find column in specific table's schema
-                                    let (schema_start, schema_len) = if table == &table_name {
+                                    let (schema_start, schema_len) = if table == &table_ref.name {
                                         (0, schema.len())
                                     } else {
                                         let mut start = schema.len();
                                         let mut len = 0;
                                         for (join, (join_schema, _)) in &joined_tables {
-                                            if &join.table_name == table {
+                                            if &join.table_ref.name == table {
                                                 len = join_schema.len();
                                                 break;
                                             }
@@ -715,15 +715,15 @@ where
             .map_err(|_| ReefDBError::Other("Failed to acquire database lock".to_string()))?;
 
         match stmt {
-            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, _joins)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, _joins)) => {
                 let mvcc_manager = self.mvcc_manager.lock()
                     .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?;
 
                 // Get the table data
-                let (schema, rows) = reef_db.storage.get_table_ref(&table_name)
-                    .ok_or_else(|| ReefDBError::TableNotFound(table_name.clone()))?;
+                let (schema, rows) = reef_db.storage.get_table_ref(&table_ref.name)
+                    .ok_or_else(|| ReefDBError::TableNotFound(table_ref.name.clone()))?;
 
-                println!("MVCC Debug - Table {} has {} rows in storage", table_name, rows.len());
+                println!("MVCC Debug - Table {} has {} rows in storage", table_ref.name, rows.len());
 
                 let mut results: Vec<(usize, Vec<DataValue>)> = Vec::new();
                 for (i, row) in rows.iter().enumerate() {
@@ -732,7 +732,7 @@ where
                         DataValue::Integer(n) => n.to_string(),
                         _ => continue, // Skip non-integer IDs
                     };
-                    let key = KeyFormat::row(&table_name, 0, &id);
+                    let key = KeyFormat::row(&table_ref.name, 0, &id);
                     println!("MVCC Debug - Checking visibility for key: {}", key);
                     if let Ok(Some(data)) = mvcc_manager.read_committed(0, &key) {
                         println!("MVCC Debug - Found visible version for key: {} with data: {:?}", key, data);
@@ -748,7 +748,7 @@ where
                                 &[],    // No join row for simple select
                                 schema,
                                 &[],    // No join schema for simple select
-                                &table_name,
+                                &table_ref.name,
                             ).unwrap_or(false)
                         } else {
                             true
@@ -838,14 +838,14 @@ where
             Statement::Create(CreateStatement::Table(table_name, _)) => {
                 self.acquire_lock(transaction_id, table_name, LockType::Exclusive)?;
             }
-            Statement::Select(SelectStatement::FromTable(table_name, _, _, _)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, _, _, _)) => {
                 // For serializable isolation, we need shared locks to prevent phantom reads
                 // But with MVCC, we don't need to acquire locks for reads since each transaction
                 // sees its own snapshot of the data
                 if isolation_level == IsolationLevel::Serializable && !self.mvcc_manager.lock()
                     .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?
                     .is_active(transaction_id) {
-                    self.acquire_lock(transaction_id, table_name, LockType::Shared)?;
+                    self.acquire_lock(transaction_id, &table_ref.name, LockType::Shared)?;
                 }
             }
             _ => {}

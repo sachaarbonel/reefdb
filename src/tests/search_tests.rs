@@ -1,19 +1,9 @@
 use crate::{
-    error::ReefDBError,
-    result::ReefDBResult,
-    InMemoryReefDB,
-    sql::{
+    error::ReefDBError, result::ReefDBResult, sql::{
         clauses::{
-            wheres::where_type::WhereType,
-            full_text_search::{clause::FTSClause, TSQuery, QueryType, Language},
-        },
-        column::Column,
-        column_def::ColumnDef,
-        data_type::DataType,
-        data_value::DataValue,
-        statements::{create::CreateStatement, insert::InsertStatement, select::SelectStatement, Statement},
-        constraints::constraint::Constraint,
-    },
+            full_text_search::{clause::FTSClause, Language, QueryType, TSQuery}, join_clause::TableReference, wheres::where_type::WhereType
+        }, column::Column, column_def::ColumnDef, constraints::constraint::Constraint, data_type::DataType, data_value::DataValue, statements::{create::CreateStatement, insert::InsertStatement, select::SelectStatement, Statement}
+    }, InMemoryReefDB
 };
 
 #[test]
@@ -66,7 +56,10 @@ fn test_fts_search_with_select() -> Result<(), ReefDBError> {
         .with_query_type(QueryType::Plain));
 
     let select_stmt = SelectStatement::FromTable(
-        "books".to_string(),
+        TableReference {
+            name: "books".to_string(),
+            alias: None,
+        },
         vec![
             Column { name: "id".to_string(), table: None },
             Column { name: "title".to_string(), table: None },

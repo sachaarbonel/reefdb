@@ -1,6 +1,7 @@
 use super::*;
 use crate::error::ReefDBError;
 use crate::result::ReefDBResult;
+use crate::sql::clauses::join_clause::TableReference;
 use crate::InMemoryReefDB;
 use crate::transaction::IsolationLevel;
 use crate::sql::statements::alter::{AlterStatement, AlterType};
@@ -35,7 +36,10 @@ fn test_add_column() {
 
     // Verify the new column exists with default value
     let stmt = Statement::Select(SelectStatement::FromTable(
-        "users".to_string(),
+        TableReference {
+            name: "users".to_string(),
+            alias: None,
+        },
         vec![Column { name: "age".to_string(), table: None }],
         None,
         vec![],
@@ -83,7 +87,10 @@ fn test_drop_column() {
 
     // Verify the column is gone
     let stmt = Statement::Select(SelectStatement::FromTable(
-        "users".to_string(),
+        TableReference {
+            name: "users".to_string(),
+            alias: None,
+        },
         vec![Column { name: "*".to_string(), table: None }],
         None,
         vec![],
@@ -128,7 +135,10 @@ fn test_rename_column() {
 
     // Verify the column was renamed and data preserved
     let stmt = Statement::Select(SelectStatement::FromTable(
-        "users".to_string(),
+        TableReference {
+            name: "users".to_string(),
+            alias: None,
+        },
         vec![Column { name: "username".to_string(), table: None }],
         None,
         vec![],

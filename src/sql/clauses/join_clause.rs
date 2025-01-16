@@ -1,18 +1,35 @@
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case},
-    character::complete::{multispace0, multispace1},
-    combinator::value,
+    character::complete::{multispace0, multispace1, alphanumeric1},
+    combinator::{opt, value},
+    sequence::{preceded, tuple},
     IResult,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use crate::sql::{column_def::table_name, column_value_pair::ColumnValuePair};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TableReference {
+    pub name: String,
+    pub alias: Option<String>,
+}
+
+impl fmt::Display for TableReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.alias {
+            Some(alias) => write!(f, "{} AS {}", self.name, alias),
+            None => write!(f, "{}", self.name),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JoinClause {
     pub join_type: JoinType,
-    pub table_name: String,
+    pub table_ref: TableReference,
     pub on: (ColumnValuePair, ColumnValuePair),
 }
 
@@ -43,8 +60,11 @@ impl JoinClause {
     ) -> JoinClause {
         JoinClause {
             join_type,
-            table_name: table_name.to_owned(),
-            on: on,
+            table_ref: TableReference {
+                name: table_name.to_owned(),
+                alias: None,
+            },
+            on,
         }
     }
 
@@ -53,7 +73,11 @@ impl JoinClause {
         let (input, _) = multispace1(input)?;
         let (input, _) = tag_no_case("JOIN")(input)?;
         let (input, _) = multispace1(input)?;
-        let (input, table_name) = table_name(input)?;
+        let (input, table_name) = alphanumeric1(input)?;
+        let (input, alias) = opt(preceded(
+            tuple((multispace1, tag_no_case("AS"), multispace1)),
+            alphanumeric1
+        ))(input)?;
         let (input, _) = multispace1(input)?;
         let (input, _) = tag_no_case("ON")(input)?;
         let (input, _) = multispace1(input)?;
@@ -67,7 +91,10 @@ impl JoinClause {
             input,
             JoinClause {
                 join_type,
-                table_name: table_name.to_owned(),
+                table_ref: TableReference {
+                    name: table_name.to_string(),
+                    alias: alias.map(|a| a.to_string()),
+                },
                 on: (col1, col2),
             },
         ))
@@ -76,15 +103,16 @@ impl JoinClause {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     #[test]
     fn join_parse_test() {
-        use super::*;
         let (input, join) =
             JoinClause::parse("INNER JOIN table1 ON table1.id = table2.id").unwrap();
         assert_eq!(input, "");
         assert_eq!(join.join_type, JoinType::Inner);
-        assert_eq!(join.table_name, "table1");
+        assert_eq!(join.table_ref.name, "table1");
+        assert_eq!(join.table_ref.alias, None);
         assert_eq!(
             join.on.0,
             ColumnValuePair {
@@ -92,7 +120,6 @@ mod tests {
                 table_name: "table1".to_owned()
             }
         );
-
         assert_eq!(
             join.on.1,
             ColumnValuePair {
@@ -103,27 +130,25 @@ mod tests {
     }
 
     #[test]
-
-    fn join_parse_2_test() {
-        use super::*;
+    fn join_parse_with_alias_test() {
         let (input, join) =
-            JoinClause::parse("INNER JOIN orders ON users.id = orders.user_id").unwrap();
+            JoinClause::parse("INNER JOIN table1 AS t1 ON t1.id = table2.id").unwrap();
         assert_eq!(input, "");
         assert_eq!(join.join_type, JoinType::Inner);
-        assert_eq!(join.table_name, "orders");
+        assert_eq!(join.table_ref.name, "table1");
+        assert_eq!(join.table_ref.alias, Some("t1".to_string()));
         assert_eq!(
             join.on.0,
             ColumnValuePair {
                 column_name: "id".to_owned(),
-                table_name: "users".to_owned()
+                table_name: "t1".to_owned()
             }
         );
-
         assert_eq!(
             join.on.1,
             ColumnValuePair {
-                column_name: "user_id".to_owned(),
-                table_name: "orders".to_owned()
+                column_name: "id".to_owned(),
+                table_name: "table2".to_owned()
             }
         );
     }

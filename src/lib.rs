@@ -1,3 +1,5 @@
+use sql::clauses::join_clause::TableReference;
+
 use crate::sql::{
     statements::{
         Statement,
@@ -217,17 +219,21 @@ where
         Ok(ReefDBResult::Insert(row_id))
     }
 
-    fn handle_select(&self, table_name: String, columns: Vec<Column>, where_clause: Option<WhereType>, joins: Vec<JoinClause>) 
-        -> Result<ReefDBResult, ReefDBError> 
-    {
-        self.verify_table_exists(&table_name)?;
-        let (schema, data) = self.get_table_schema(&table_name)?;
+    fn handle_select(
+        &self,
+        table_ref: TableReference,
+        columns: Vec<Column>,
+        where_clause: Option<WhereType>,
+        joins: Vec<JoinClause>,
+    ) -> Result<ReefDBResult, ReefDBError> {
+        self.verify_table_exists(&table_ref.name)?;
+        let (schema, data) = self.get_table_schema(&table_ref.name)?;
         
         let mut result = Vec::new();
         if joins.is_empty() {
-            self.handle_simple_select(&table_name, schema, data, &columns, where_clause, &mut result)?;
+            self.handle_simple_select(&table_ref.name, schema, data, &columns, where_clause, &mut result)?;
         } else {
-            self.handle_join_select(&table_name, schema, data, &columns, where_clause, &joins, &mut result)?;
+            self.handle_join_select(&table_ref.name, schema, data, &columns, where_clause, &joins, &mut result)?;
         }
         
         Ok(ReefDBResult::Select(result))
@@ -278,7 +284,7 @@ where
         result: &mut Vec<(usize, Vec<DataValue>)>,
     ) -> Result<(), ReefDBError> {
         for join in joins {
-            if let Some((join_schema, join_data)) = self.storage.get_table_ref(&join.table_name) {
+            if let Some((join_schema, join_data)) = self.storage.get_table_ref(&join.table_ref.name) {
                 let left_col_idx = schema.iter()
                     .position(|c| c.name == join.on.0.column_name)
                     .ok_or_else(|| ReefDBError::ColumnNotFound(join.on.0.column_name.clone()))?;
@@ -303,7 +309,7 @@ where
                                         selected_values.extend(join_row.iter().cloned());
                                     } else {
                                         let value = if let Some(table) = &col.table {
-                                            if table == &join.table_name {
+                                            if table == &join.table_ref.name {
                                                 if let Some(idx) = join_schema.iter().position(|c| c.name == col.name) {
                                                     join_row[idx].clone()
                                                 } else {
