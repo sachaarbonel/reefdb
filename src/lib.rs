@@ -49,6 +49,7 @@ pub mod savepoint;
 pub mod locks;
 pub mod key_format;
 pub mod fts;
+pub mod functions;
 #[cfg(test)]
 pub mod tests;
 
