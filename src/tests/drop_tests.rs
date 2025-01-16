@@ -1,7 +1,8 @@
 use super::*;
 use crate::error::ReefDBError;
 use crate::result::ReefDBResult;
-use crate::sql::clauses::join_clause::TableReference;
+use crate::sql::table_reference::TableReference;
+use crate::sql::column::ColumnType;
 use crate::InMemoryReefDB;
 use crate::transaction::IsolationLevel;
 use crate::sql::statements::drop::DropStatement;
@@ -39,7 +40,7 @@ fn test_drop_table() {
             name: "users".to_string(),
             alias: None,
         },
-        vec![Column { name: "*".to_string(), table: None }],
+        vec![Column { name: "*".to_string(), table: None, column_type: ColumnType::Wildcard }],
         None,
         vec![],
     ));

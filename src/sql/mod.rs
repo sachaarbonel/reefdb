@@ -1,11 +1,12 @@
 pub mod clauses;
+pub mod column;
 pub mod column_def;
 pub mod column_value_pair;
-pub mod constraints;
-pub mod data_type;
 pub mod data_value;
-pub mod statements;
-pub mod column;
 pub mod operators;
-pub mod table;
 pub mod parser;
+pub mod statements;
+pub mod table_reference;
+pub mod data_type;
+pub mod constraints;
+pub use self::statements::Statement;

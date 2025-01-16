@@ -1,9 +1,10 @@
 use crate::{
+    sql::table_reference::TableReference,
     error::ReefDBError, result::ReefDBResult, sql::{
         clauses::{
-            full_text_search::{ Language, QueryType, TSQuery}, join_clause::TableReference, wheres::where_type::WhereType, FTSClause
+            full_text_search::{ Language, QueryType, TSQuery}, wheres::where_type::WhereType, FTSClause
         },
-        column::Column,
+        column::{Column, ColumnType},
         column_def::ColumnDef,
         constraints::{
             constraint::Constraint,
@@ -37,7 +38,7 @@ fn test_create_statement() -> Result<(), ReefDBError> {
             name: "users".to_string(),
             alias: None,
         },
-        vec![Column { name: "*".to_string(), table: None }],
+        vec![Column { name: "*".to_string(), table: None, column_type: ColumnType::Wildcard }],
         None,
         vec![],
     );
@@ -118,7 +119,7 @@ fn test_create_statement() -> Result<(), ReefDBError> {
     assert_eq!(result, ReefDBResult::Insert(1));
 
     // Test FTS search
-    let column = Column { name: "content".to_string(), table: None };
+    let column = Column { name: "content".to_string(), table: None, column_type: ColumnType::Regular("content".to_string()) };
     let query = TSQuery::new("Rust".to_string())
         .with_type(QueryType::Plain)
         .with_language(Language::English);
@@ -132,7 +133,7 @@ fn test_create_statement() -> Result<(), ReefDBError> {
             name: "articles".to_string(),
             alias: None,
         },
-        vec![Column { name: "*".to_string(), table: None }],
+        vec![Column { name: "*".to_string(), table: None, column_type: ColumnType::Wildcard }],
         Some(where_clause),
         vec![],
     );

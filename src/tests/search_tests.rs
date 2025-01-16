@@ -1,8 +1,9 @@
 use crate::{
+    sql::table_reference::TableReference,
     error::ReefDBError, result::ReefDBResult, sql::{
         clauses::{
-            full_text_search::{clause::FTSClause, Language, QueryType, TSQuery}, join_clause::TableReference, wheres::where_type::WhereType
-        }, column::Column, column_def::ColumnDef, constraints::constraint::Constraint, data_type::DataType, data_value::DataValue, statements::{create::CreateStatement, insert::InsertStatement, select::SelectStatement, Statement}
+            full_text_search::{clause::FTSClause, Language, QueryType, TSQuery}, wheres::where_type::WhereType
+        }, column::{Column, ColumnType}, column_def::ColumnDef, constraints::constraint::Constraint, data_type::DataType, data_value::DataValue, statements::{create::CreateStatement, insert::InsertStatement, select::SelectStatement, Statement}
     }, InMemoryReefDB
 };
 
@@ -46,7 +47,7 @@ fn test_fts_search_with_select() -> Result<(), ReefDBError> {
     }
 
     // Test FTS with new syntax
-    let column = Column { name: "description".to_string(), table: None };
+    let column = Column { name: "description".to_string(), table: None, column_type: ColumnType::Regular("description".to_string()) };
     let query = TSQuery::new("computer & science".to_string())
         .with_type(QueryType::Plain)
         .with_language(Language::English);
@@ -61,9 +62,9 @@ fn test_fts_search_with_select() -> Result<(), ReefDBError> {
             alias: None,
         },
         vec![
-            Column { name: "id".to_string(), table: None },
-            Column { name: "title".to_string(), table: None },
-            Column { name: "author".to_string(), table: None },
+            Column { name: "id".to_string(), table: None, column_type: ColumnType::Regular("id".to_string()) },
+            Column { name: "title".to_string(), table: None, column_type: ColumnType::Regular("title".to_string()) },
+            Column { name: "author".to_string(), table: None, column_type: ColumnType::Regular("author".to_string()) },
         ],
         Some(where_clause),
         vec![],

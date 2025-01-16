@@ -1,19 +1,17 @@
 use nom::{
     bytes::complete::{tag, tag_no_case},
-    character::complete::{alphanumeric1, multispace1},
-    combinator::opt,
-    multi::separated_list0,
-    sequence::terminated,
+    character::complete::{multispace0, multispace1, alphanumeric1},
+    combinator::{map, opt},
+    sequence::{delimited, tuple},
+    multi::separated_list1,
     IResult,
 };
 
 use crate::sql::{
-    clauses::wheres::where_type::{WhereType, WhereClause, parse_where_clause},
+    clauses::wheres::where_type::{parse_where_clause, WhereType},
     data_value::DataValue,
-    operators::op::Op,
+    statements::Statement,
 };
-use crate::sql::column_def::table_name;
-use super::Statement;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum UpdateStatement {
@@ -22,65 +20,94 @@ pub enum UpdateStatement {
 
 impl UpdateStatement {
     pub fn parse(input: &str) -> IResult<&str, Statement> {
-        let (input, _) = tag_no_case("UPDATE")(input)?;
-        let (input, _) = multispace1(input)?;
-        let (input, table_name) = table_name(input)?;
-        let (input, _) = multispace1(input)?;
-        let (input, _) = tag_no_case("SET")(input)?;
-        let (input, _) = multispace1(input)?;
-        let (input, updates) = separated_list0(
-            terminated(tag(","), multispace1),
-            parse_column_value_pair,
+        let (input, _) = delimited(
+            multispace0,
+            tag_no_case("UPDATE"),
+            multispace1
         )(input)?;
-        let (input, _) = opt(multispace1)(input)?;
+
+        let (input, table_name) = delimited(
+            multispace0,
+            alphanumeric1,
+            multispace0
+        )(input)?;
+
+        let (input, _) = delimited(
+            multispace0,
+            tag_no_case("SET"),
+            multispace1
+        )(input)?;
+
+        let (input, updates) = separated_list1(
+            delimited(multispace0, tag(","), multispace0),
+            map(
+                tuple((
+                    alphanumeric1,
+                    delimited(multispace0, tag("="), multispace0),
+                    DataValue::parse
+                )),
+                |(col, _, val)| (col.to_string(), val)
+            )
+        )(input)?;
+
         let (input, where_clause) = opt(parse_where_clause)(input)?;
 
-        Ok((
-            input,
-            Statement::Update(UpdateStatement::UpdateTable(
-                table_name.to_string(),
-                updates,
-                where_clause,
-            )),
-        ))
+        Ok((input, Statement::Update(UpdateStatement::UpdateTable(
+            table_name.to_string(),
+            updates,
+            where_clause,
+        ))))
     }
-}
-
-fn parse_column_value_pair(input: &str) -> IResult<&str, (String, DataValue)> {
-    let (input, col_name) = alphanumeric1(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, _) = tag("=")(input)?;
-    let (input, _) = multispace1(input)?;
-    let (input, value) = DataValue::parse(input)?;
-
-    Ok((input, (col_name.to_string(), value)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sql::statements::Statement;
+    use crate::sql::{
+        clauses::wheres::where_clause::WhereClause,
+        data_value::DataValue,
+        operators::op::Op,
+    };
 
     #[test]
-    fn parse_test() {
-        assert_eq!(
-            UpdateStatement::parse("UPDATE users SET id = 1, name = 'John' WHERE id = 1"),
-            Ok((
-                "",
-                Statement::Update(UpdateStatement::UpdateTable(
-                    "users".to_string(),
-                    vec![
-                        ("id".to_string(), DataValue::Integer(1)),
-                        ("name".to_string(), DataValue::Text("John".to_string())),
-                    ],
-                    Some(WhereType::Regular(WhereClause::new(
-                        "id".to_string(),
-                        Op::Equal,
-                        DataValue::Integer(1),
-                        None
-                    )))
-                ))
-            ))
-        );
+    fn parse_update_with_where_test() {
+        let input = "UPDATE users SET name = 'John' WHERE id = 1";
+        let (remaining, stmt) = UpdateStatement::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        match stmt {
+            Statement::Update(UpdateStatement::UpdateTable(table_name, updates, Some(WhereType::Regular(where_clause)))) => {
+                assert_eq!(table_name, "users");
+                assert_eq!(updates.len(), 1);
+                assert_eq!(updates[0].0, "name");
+                assert_eq!(updates[0].1, DataValue::Text("John".to_string()));
+                assert_eq!(where_clause.col_name, "id");
+                assert_eq!(where_clause.operator, Op::Equal);
+                assert_eq!(where_clause.value, DataValue::Integer(1));
+            }
+            _ => panic!("Expected Update statement with where clause"),
+        }
+    }
+
+    #[test]
+    fn parse_update_multiple_columns_test() {
+        let input = "UPDATE users SET name = 'John', age = 30, status = 'active' WHERE status = 'active'";
+        let (remaining, stmt) = UpdateStatement::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        match stmt {
+            Statement::Update(UpdateStatement::UpdateTable(table_name, updates, Some(WhereType::Regular(where_clause)))) => {
+                assert_eq!(table_name, "users");
+                assert_eq!(updates.len(), 3);
+                assert_eq!(updates[0].0, "name");
+                assert_eq!(updates[0].1, DataValue::Text("John".to_string()));
+                assert_eq!(updates[1].0, "age");
+                assert_eq!(updates[1].1, DataValue::Integer(30));
+                assert_eq!(updates[2].0, "status");
+                assert_eq!(updates[2].1, DataValue::Text("active".to_string()));
+                assert_eq!(where_clause.col_name, "status");
+                assert_eq!(where_clause.operator, Op::Equal);
+                assert_eq!(where_clause.value, DataValue::Text("active".to_string()));
+            }
+            _ => panic!("Expected Update statement with where clause"),
+        }
     }
 }

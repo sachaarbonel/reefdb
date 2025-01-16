@@ -253,7 +253,7 @@ mod tests {
         // Create multiple uncommitted versions with different timestamps
         for i in 2u64..5u64 {
             thread::sleep(Duration::from_millis(10));
-            let version = Version::new(i, vec![DataValue::Integer((i * 100) as i32)]);
+            let version = Version::new(i, vec![DataValue::Integer(((i * 100) as i32).into())]);
             store.store_version(key.clone(), version);
         }
         

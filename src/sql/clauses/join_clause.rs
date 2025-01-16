@@ -9,22 +9,11 @@ use nom::{
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::sql::{column_def::table_name, column_value_pair::ColumnValuePair};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TableReference {
-    pub name: String,
-    pub alias: Option<String>,
-}
-
-impl fmt::Display for TableReference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.alias {
-            Some(alias) => write!(f, "{} AS {}", self.name, alias),
-            None => write!(f, "{}", self.name),
-        }
-    }
-}
+use crate::sql::{
+    column_def::table_name,
+    column_value_pair::ColumnValuePair,
+    table_reference::TableReference,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JoinClause {
@@ -39,7 +28,6 @@ pub enum JoinType {
     Left,
     Right,
     Full,
-    // Add other join types if needed
 }
 
 fn join_type(input: &str) -> IResult<&str, JoinType> {
@@ -48,7 +36,6 @@ fn join_type(input: &str) -> IResult<&str, JoinType> {
         value(JoinType::Left, tag_no_case("LEFT")),
         value(JoinType::Right, tag_no_case("RIGHT")),
         value(JoinType::Full, tag_no_case("FULL")),
-        // Add other join types if needed
     ))(input)
 }
 

@@ -1,12 +1,9 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tempfile::tempdir;
 use crate::fts::search::Search;
 
 use crate::{
-    acid::AcidManager,
     deadlock::DeadlockDetector,
     error::ReefDBError,
     indexes::{

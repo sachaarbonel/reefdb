@@ -1,5 +1,5 @@
-use sql::clauses::join_clause::TableReference;
-
+use crate::sql::table_reference::TableReference;
+use crate::sql::data_type::DataType;
 use crate::sql::{
     statements::{
         Statement,
@@ -13,7 +13,6 @@ use crate::sql::{
         create_index::CreateIndexStatement,
         drop_index::DropIndexStatement,
     },
-    data_type::DataType,
     column_def::ColumnDef,
     clauses::{
         wheres::where_type::WhereType,

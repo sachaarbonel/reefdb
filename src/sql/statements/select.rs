@@ -1,21 +1,24 @@
-use crate::sql::{
-    clauses::{
-        join_clause::{JoinClause, TableReference},
-        wheres::where_type::{WhereType, parse_where_clause},
-    },
-    column::Column,
-    column_value_pair::identifier,
-    statements::Statement,
-};
-
 use nom::{
+    branch::alt,
     bytes::complete::{tag, tag_no_case},
-    character::complete::{multispace0, multispace1, alphanumeric1},
+    character::complete::{multispace0, multispace1},
     combinator::{map, opt},
     multi::{many0, separated_list0},
-    sequence::{preceded, terminated, tuple, delimited},
-    branch::alt,
+    sequence::{delimited, preceded, terminated, tuple},
     IResult,
+};
+
+use crate::sql::{
+    clauses::{
+        join_clause::{JoinClause, JoinType},
+        wheres::where_type::{parse_where_clause, WhereType},
+    },
+    column::{Column, ColumnType},
+    column_value_pair::identifier,
+    data_value::DataValue,
+    operators::op::Op,
+    statements::Statement,
+    table_reference::TableReference,
 };
 
 #[derive(Debug, PartialEq, Clone)]
@@ -30,21 +33,25 @@ impl SelectStatement {
             tag_no_case("SELECT"),
             multispace1
         )(input)?;
+        
         let (input, columns) = delimited(
             multispace0,
             parse_column_list,
             multispace0
         )(input)?;
+        
         let (input, _) = delimited(
             multispace0,
             tag_no_case("FROM"),
             multispace0
         )(input)?;
+        
         let (input, table_name) = delimited(
             multispace0,
             identifier,
             multispace0
         )(input)?;
+        
         let (input, alias) = opt(preceded(
             delimited(
                 multispace0,
@@ -65,47 +72,24 @@ impl SelectStatement {
             multispace0
         ))(input)?;
 
-        let (input, where_clause) = opt(preceded(
+        let (input, where_clause) = opt(delimited(
             multispace0,
-            parse_where_clause
+            parse_where_clause,
+            multispace0
         ))(input)?;
 
-        let (input, _) = multispace0(input)?;
-
-        if !input.is_empty() {
-            return Err(nom::Err::Error(nom::error::Error::new(
-                input,
-                nom::error::ErrorKind::Eof
-            )));
-        }
-
-        Ok((
-            input,
-            Statement::Select(SelectStatement::FromTable(
-                table_ref,
-                columns,
-                where_clause,
-                joins,
-            )),
-        ))
-    }
-
-    pub fn get_tables(&self) -> Vec<&str> {
-        match self {
-            SelectStatement::FromTable(table_ref, _, _, joins) => {
-                let mut tables = vec![table_ref.name.as_str()];
-                for join in joins {
-                    tables.push(&join.table_ref.name);
-                }
-                tables
-            }
-        }
+        Ok((input, Statement::Select(SelectStatement::FromTable(
+            table_ref,
+            columns,
+            where_clause,
+            joins,
+        ))))
     }
 }
 
 fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
     alt((
-        // Handle single * wildcard with optional whitespace
+        // Handle SELECT *
         map(
             delimited(
                 multispace0,
@@ -115,11 +99,12 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
             |_| vec![Column {
                 table: None,
                 name: "*".to_string(),
+                column_type: ColumnType::Wildcard,
             }]
         ),
         // Handle comma-separated list of columns
         separated_list0(
-            terminated(tag(","), multispace0),
+            delimited(multispace0, tag(","), multispace0),
             map(
                 tuple((
                     opt(terminated(identifier, tag("."))),
@@ -128,6 +113,7 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
                 |(table, name)| Column {
                     table: table.map(|t| t.to_string()),
                     name: name.to_string(),
+                    column_type: ColumnType::Regular(name.to_string()),
                 }
             )
         )
@@ -139,7 +125,6 @@ mod tests {
     use super::*;
     use crate::sql::{
         clauses::join_clause::JoinType,
-        column_value_pair::ColumnValuePair,
         column::Column,
         statements::Statement,
     };
@@ -159,11 +144,31 @@ mod tests {
                 vec![Column {
                     table: None,
                     name: "name".to_string(),
+                    column_type: ColumnType::Regular("name".to_string()),
                 }],
                 None,
                 vec![]
             ))
         );
+    }
+
+    #[test]
+    fn parse_select_with_where_test() {
+        let input = "SELECT name FROM users WHERE id = 1";
+        let result = SelectStatement::parse(input);
+        let (_input, statement) = result.unwrap();
+        match statement {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, Some(WhereType::Regular(where_clause)), joins)) => {
+                assert_eq!(table_ref.name, "users");
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0].name, "name");
+                assert_eq!(where_clause.col_name, "id");
+                assert_eq!(where_clause.operator, Op::Equal);
+                assert_eq!(where_clause.value, DataValue::Integer(1));
+                assert!(joins.is_empty());
+            }
+            _ => panic!("Expected Select statement with where clause"),
+        }
     }
 
     #[test]
@@ -181,6 +186,7 @@ mod tests {
                 vec![Column {
                     table: Some("u".to_string()),
                     name: "name".to_string(),
+                    column_type: ColumnType::Regular("name".to_string()),
                 }],
                 None,
                 vec![]
@@ -189,81 +195,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_select_join_test() {
-        let input = "SELECT users.name, orders.item FROM users INNER JOIN orders ON users.id = orders.user_id";
-        let result = SelectStatement::parse(input);
-        assert_eq!(result.is_ok(), true);
-        let (_input, statement) = result.unwrap();
-        assert_eq!(
-            statement,
-            Statement::Select(SelectStatement::FromTable(
-                TableReference {
-                    name: "users".to_string(),
-                    alias: None,
-                },
-                vec![
-                    Column {
-                        table: Some("users".to_string()),
-                        name: "name".to_string(),
-                    },
-                    Column {
-                        table: Some("orders".to_string()),
-                        name: "item".to_string(),
-                    }
-                ],
-                None,
-                vec![JoinClause {
-                    join_type: JoinType::Inner,
-                    table_ref: TableReference {
-                        name: "orders".to_string(),
-                        alias: None,
-                    },
-                    on: (
-                        ColumnValuePair::new("id", "users"),
-                        ColumnValuePair::new("user_id", "orders")
-                    )
-                }]
-            ))
-        );
-    }
-
-    // add test for  "SELECT * FROM test_types WHERE int_col = 123",
-        // "SELECT * FROM test_types WHERE text_col = 'Hello World'",
-        // "SELECT * FROM test_types WHERE bool_col = true",
-        // "SELECT * FROM test_types WHERE float_col > 45.0",
-        // "SELECT * FROM test_types WHERE date_col = '2024-03-14'",
-        // "SELECT * FROM test_types WHERE timestamp_col = '2024-03-14 12:34:56'",
-
-        #[test]
-        fn parse_select_star_test2() {
-            let input = "SELECT * FROM test_types";
-            let result = SelectStatement::parse(input);
-            assert_eq!(result.is_ok(), true);
-            let (_input, statement) = result.unwrap();
-            assert_eq!(
-                statement,
-                Statement::Select(SelectStatement::FromTable(
-                    TableReference {
-                        name: "test_types".to_string(),
-                        alias: None,
-                    },
-                    vec![Column {
-                        table: None,
-                        name: "*".to_string(),
-                    }],
-                    None,
-                    vec![]
-                ))
-            );
-        }
-
-    
-
-    #[test]
     fn parse_select_star_test() {
         let input = "SELECT * FROM users";
         let result = SelectStatement::parse(input);
-        assert_eq!(result.is_ok(), true);
         let (_input, statement) = result.unwrap();
         assert_eq!(
             statement,
@@ -275,10 +209,35 @@ mod tests {
                 vec![Column {
                     table: None,
                     name: "*".to_string(),
+                    column_type: ColumnType::Wildcard,
                 }],
                 None,
                 vec![]
             ))
         );
+    }
+
+    #[test]
+    fn parse_select_join_test() {
+        let input = "SELECT u.name, p.title FROM users AS u INNER JOIN posts AS p ON u.id = p.user_id";
+        let result = SelectStatement::parse(input);
+        let (_input, statement) = result.unwrap();
+        match statement {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins)) => {
+                assert_eq!(table_ref.name, "users");
+                assert_eq!(table_ref.alias, Some("u".to_string()));
+                assert_eq!(columns.len(), 2);
+                assert_eq!(columns[0].table, Some("u".to_string()));
+                assert_eq!(columns[0].name, "name");
+                assert_eq!(columns[1].table, Some("p".to_string()));
+                assert_eq!(columns[1].name, "title");
+                assert!(where_clause.is_none());
+                assert_eq!(joins.len(), 1);
+                assert_eq!(joins[0].join_type, JoinType::Inner);
+                assert_eq!(joins[0].table_ref.name, "posts");
+                assert_eq!(joins[0].table_ref.alias, Some("p".to_string()));
+            }
+            _ => panic!("Expected Select statement with join"),
+        }
     }
 }

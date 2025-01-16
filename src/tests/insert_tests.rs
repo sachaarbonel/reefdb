@@ -1,7 +1,8 @@
 use super::*;
 use crate::error::ReefDBError;
 use crate::result::ReefDBResult;
-use crate::sql::clauses::join_clause::TableReference;
+use crate::sql::table_reference::TableReference;
+use crate::sql::column::ColumnType;
 use crate::InMemoryReefDB;
 
 #[test]
@@ -33,7 +34,7 @@ fn test_insert_statement() -> Result<(), ReefDBError> {
             name: "users".to_string(),
             alias: None,
         },
-        vec![Column { name: "*".to_string(), table: None }],
+        vec![Column { name: "*".to_string(), table: None ,column_type: ColumnType::Wildcard}],
         None,
         vec![],
     );
@@ -98,7 +99,7 @@ fn test_insert_statement() -> Result<(), ReefDBError> {
             name: "users".to_string(),
             alias: None,
         },
-        vec![Column { name: "*".to_string(), table: None }],
+        vec![Column { name: "*".to_string(), table: None, column_type: ColumnType::Wildcard }],
         None,
         vec![],
     );

@@ -46,11 +46,23 @@ impl WhereClause {
     }
 
     pub fn parse(input: &str) -> IResult<&str, Self> {
-        let (input, col) = Column::parse(input)?;
-        let (input, _) = multispace1(input)?;
-        let (input, operator) = Op::parse(input)?;
-        let (input, _) = multispace1(input)?;
-        let (input, value) = DataValue::parse(input)?;
+        let (input, col) = delimited(
+            multispace0,
+            Column::parse,
+            multispace0
+        )(input)?;
+        
+        let (input, operator) = delimited(
+            multispace0,
+            Op::parse,
+            multispace0
+        )(input)?;
+        
+        let (input, value) = delimited(
+            multispace0,
+            DataValue::parse,
+            multispace0
+        )(input)?;
 
         Ok((input, WhereClause {
             col_name: col.name,
@@ -62,9 +74,18 @@ impl WhereClause {
 }
 
 pub fn parse_where_clause(input: &str) -> IResult<&str, WhereType> {
-    let (input, _) = tag_no_case("WHERE")(input)?;
-    let (input, _) = multispace1(input)?;
-    parse_where_expression(input)
+    let (input, _) = delimited(
+        multispace0,
+        tag_no_case("WHERE"),
+        multispace1
+    )(input)?;
+    
+    let (input, result) = parse_where_expression(input)?;
+    
+    // Consume any trailing whitespace
+    let (input, _) = multispace0(input)?;
+    
+    Ok((input, result))
 }
 
 fn parse_where_expression(input: &str) -> IResult<&str, WhereType> {
@@ -75,20 +96,18 @@ fn parse_where_expression(input: &str) -> IResult<&str, WhereType> {
         // Parse AND condition
         map(
             tuple((
-                tag_no_case("AND"),
-                multispace1,
-                parse_where_expression,
+                delimited(multispace0, tag_no_case("AND"), multispace1),
+                parse_where_expression
             )),
-            |(_, _, right)| WhereType::And(Box::new(first.clone()), Box::new(right))
+            |(_, right)| WhereType::And(Box::new(first.clone()), Box::new(right))
         ),
         // Parse OR condition
         map(
             tuple((
-                tag_no_case("OR"),
-                multispace1,
-                parse_where_expression,
+                delimited(multispace0, tag_no_case("OR"), multispace1),
+                parse_where_expression
             )),
-            |(_, _, right)| WhereType::Or(Box::new(first.clone()), Box::new(right))
+            |(_, right)| WhereType::Or(Box::new(first.clone()), Box::new(right))
         ),
     )))(input)?;
 
@@ -97,21 +116,19 @@ fn parse_where_expression(input: &str) -> IResult<&str, WhereType> {
 
 fn parse_single_clause(input: &str) -> IResult<&str, WhereType> {
     alt((
-        // Parse regular clause first
-        map(WhereClause::parse, WhereType::Regular),
-        // Parse parenthesized expression
+        // Try parenthesized expression first
         map(
-            tuple((
-                tag("("),
-                multispace0,
+            delimited(
+                tuple((tag("("), multispace0)),
                 parse_where_expression,
-                multispace0,
-                tag(")"),
-            )),
-            |(_, _, expr, _, _)| expr
+                tuple((multispace0, tag(")")))
+            ),
+            |expr| expr
         ),
-        // Parse FTS clause
+        // Then try FTS clause as it's more specific
         map(FTSClause::parse, WhereType::FTS),
+        // Finally try regular clause
+        map(WhereClause::parse, WhereType::Regular)
     ))(input)
 }
 
@@ -183,7 +200,74 @@ pub fn parse_fts_where(input: &str) -> IResult<&str, WhereType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::super::full_text_search::{TSQuery, QueryType, Language};
+
+    #[test]
+    fn test_parse_where_clause() {
+        // Test basic where clause
+        let input = "WHERE age > 18";
+        let (remaining, where_type) = parse_where_clause(input).unwrap();
+        assert_eq!(remaining, "");
+        match where_type {
+            WhereType::Regular(clause) => {
+                assert_eq!(clause.col_name, "age");
+                assert_eq!(clause.operator, Op::GreaterThan);
+                assert_eq!(clause.value, DataValue::Integer(18));
+                assert_eq!(clause.table, None);
+            }
+            _ => panic!("Expected Regular where clause"),
+        }
+
+        // Test with table name
+        let input = "WHERE users.age = 25";
+        let (remaining, where_type) = parse_where_clause(input).unwrap();
+        assert_eq!(remaining, "");
+        match where_type {
+            WhereType::Regular(clause) => {
+                assert_eq!(clause.col_name, "age");
+                assert_eq!(clause.operator, Op::Equal);
+                assert_eq!(clause.value, DataValue::Integer(25));
+                assert_eq!(clause.table, Some("users".to_string()));
+            }
+            _ => panic!("Expected Regular where clause"),
+        }
+
+        // Test with extra whitespace
+        let input = "WHERE   users.age   =  25  ";
+        let (remaining, where_type) = parse_where_clause(input).unwrap();
+        assert_eq!(remaining, "");
+        match where_type {
+            WhereType::Regular(clause) => {
+                assert_eq!(clause.col_name, "age");
+                assert_eq!(clause.operator, Op::Equal);
+                assert_eq!(clause.value, DataValue::Integer(25));
+                assert_eq!(clause.table, Some("users".to_string()));
+            }
+            _ => panic!("Expected Regular where clause"),
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_where() {
+        let input = "WHERE age > 18 AND status = 'active'";
+        let (remaining, where_type) = parse_where_clause(input).unwrap();
+        assert_eq!(remaining, "");
+        match where_type {
+            WhereType::And(left, right) => {
+                match (*left, *right) {
+                    (WhereType::Regular(left_clause), WhereType::Regular(right_clause)) => {
+                        assert_eq!(left_clause.col_name, "age");
+                        assert_eq!(left_clause.operator, Op::GreaterThan);
+                        assert_eq!(left_clause.value, DataValue::Integer(18));
+                        assert_eq!(right_clause.col_name, "status");
+                        assert_eq!(right_clause.operator, Op::Equal);
+                        assert_eq!(right_clause.value, DataValue::Text("active".to_string()));
+                    }
+                    _ => panic!("Expected two Regular clauses"),
+                }
+            }
+            _ => panic!("Expected AND clause"),
+        }
+    }
 
     #[test]
     fn test_parse_fts_where() {

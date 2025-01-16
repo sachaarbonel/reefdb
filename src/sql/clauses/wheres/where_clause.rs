@@ -1,15 +1,15 @@
 use nom::{
-    bytes::complete::{tag, tag_no_case, take_till},
-    character::complete::{alphanumeric1, multispace1, space1},
-    sequence::delimited,
     IResult,
+    sequence::{delimited, tuple},
+    character::complete::multispace0,
 };
-
 use crate::sql::{
-    column::Column, column_def::column_name, data_value::DataValue, operators::op::Op,
+    column::Column,
+    operators::op::Op,
+    data_value::DataValue,
 };
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WhereClause {
     pub col_name: String,
     pub operator: Op,
@@ -27,24 +27,67 @@ impl WhereClause {
         }
     }
 
-    pub fn evaluate(&self, row_value: &DataValue) -> bool {
-        self.operator.evaluate(row_value, &self.value)
+    pub fn parse(input: &str) -> IResult<&str, Self> {
+        let (input, col) = delimited(
+            multispace0,
+            Column::parse,
+            multispace0
+        )(input)?;
+
+        let (input, operator) = delimited(
+            multispace0,
+            Op::parse,
+            multispace0
+        )(input)?;
+
+        let (input, value) = delimited(
+            multispace0,
+            DataValue::parse,
+            multispace0
+        )(input)?;
+
+        Ok((input, WhereClause {
+            col_name: col.name,
+            operator,
+            value,
+            table: col.table,
+        }))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sql::data_value::DataValue;
+    use crate::sql::operators::op::Op;
 
     #[test]
-    fn where_clause_test() {
-        let clause = WhereClause::new(
-            "age".to_string(),
-            Op::GreaterThan,
-            DataValue::Integer(18),
-            None,
-        );
-        assert!(clause.evaluate(&DataValue::Integer(20)));
-        assert!(!clause.evaluate(&DataValue::Integer(16)));
+    fn test_parse_where_clause() {
+        // Test basic where clause
+        let input = "age > 18";
+        let (remaining, clause) = WhereClause::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        assert_eq!(clause.col_name, "age");
+        assert_eq!(clause.operator, Op::GreaterThan);
+        assert_eq!(clause.value, DataValue::Integer(18));
+        assert_eq!(clause.table, None);
+
+        // Test with table name
+        let input = "users.age = 25";
+        let (remaining, clause) = WhereClause::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        assert_eq!(clause.col_name, "age");
+        assert_eq!(clause.operator, Op::Equal);
+        assert_eq!(clause.value, DataValue::Integer(25));
+        assert_eq!(clause.table, Some("users".to_string()));
+
+        // Test with extra whitespace
+        let input = "  users.age   =  25  ";
+        let (remaining, clause) = WhereClause::parse(input).unwrap();
+        assert_eq!(remaining, "");
+        assert_eq!(clause.col_name, "age");
+        assert_eq!(clause.operator, Op::Equal);
+        assert_eq!(clause.value, DataValue::Integer(25));
+        assert_eq!(clause.table, Some("users".to_string()));
     }
 }

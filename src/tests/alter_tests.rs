@@ -1,7 +1,8 @@
 use super::*;
 use crate::error::ReefDBError;
 use crate::result::ReefDBResult;
-use crate::sql::clauses::join_clause::TableReference;
+use crate::sql::table_reference::TableReference;
+use crate::sql::column::ColumnType;
 use crate::InMemoryReefDB;
 use crate::transaction::IsolationLevel;
 use crate::sql::statements::alter::{AlterStatement, AlterType};
@@ -40,7 +41,7 @@ fn test_add_column() {
             name: "users".to_string(),
             alias: None,
         },
-        vec![Column { name: "age".to_string(), table: None }],
+        vec![Column { name: "age".to_string(), table: None, column_type: ColumnType::Regular("age".to_string()) }],
         None,
         vec![],
     ));
@@ -91,7 +92,7 @@ fn test_drop_column() {
             name: "users".to_string(),
             alias: None,
         },
-        vec![Column { name: "*".to_string(), table: None }],
+        vec![Column { name: "*".to_string(), table: None ,column_type: ColumnType::Wildcard}],
         None,
         vec![],
     ));
@@ -139,7 +140,7 @@ fn test_rename_column() {
             name: "users".to_string(),
             alias: None,
         },
-        vec![Column { name: "username".to_string(), table: None }],
+        vec![Column { name: "username".to_string(), table: None ,column_type: ColumnType::Regular("username".to_string())}],
         None,
         vec![],
     ));
