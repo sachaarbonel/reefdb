@@ -4,6 +4,7 @@ use nom::{
     bytes::complete::{tag, tag_no_case, take_until},
     character::complete::{multispace0, multispace1},
     sequence::{tuple, delimited},
+    multi::many0,
     combinator::{map, opt},
 };
 
@@ -46,23 +47,13 @@ impl WhereClause {
     }
 
     pub fn parse(input: &str) -> IResult<&str, Self> {
-        let (input, col) = delimited(
-            multispace0,
-            Column::parse,
-            multispace0
-        )(input)?;
-        
+        let (input, col) = Column::parse(input)?;
         let (input, operator) = delimited(
             multispace0,
             Op::parse,
             multispace0
         )(input)?;
-        
-        let (input, value) = delimited(
-            multispace0,
-            DataValue::parse,
-            multispace0
-        )(input)?;
+        let (input, value) = DataValue::parse(input)?;
 
         Ok((input, WhereClause {
             col_name: col.name,
@@ -74,127 +65,60 @@ impl WhereClause {
 }
 
 pub fn parse_where_clause(input: &str) -> IResult<&str, WhereType> {
-    let (input, _) = delimited(
-        multispace0,
-        tag_no_case("WHERE"),
-        multispace1
-    )(input)?;
-    
+    let (input, _) = tag_no_case("WHERE")(input)?;
+    let (input, _) = multispace1(input)?;
     let (input, result) = parse_where_expression(input)?;
-    
-    // Consume any trailing whitespace
     let (input, _) = multispace0(input)?;
-    
     Ok((input, result))
 }
 
-fn parse_where_expression(input: &str) -> IResult<&str, WhereType> {
-    let (input, first) = parse_single_clause(input)?;
-    let (input, _) = multispace0(input)?;
-    
-    let (input, rest) = opt(alt((
-        // Parse AND condition
-        map(
-            tuple((
-                delimited(multispace0, tag_no_case("AND"), multispace1),
-                parse_where_expression
-            )),
-            |(_, right)| WhereType::And(Box::new(first.clone()), Box::new(right))
-        ),
-        // Parse OR condition
-        map(
-            tuple((
-                delimited(multispace0, tag_no_case("OR"), multispace1),
-                parse_where_expression
-            )),
-            |(_, right)| WhereType::Or(Box::new(first.clone()), Box::new(right))
-        ),
-    )))(input)?;
-
-    Ok((input, rest.unwrap_or(first)))
+fn parse_binary_op(input: &str) -> IResult<&str, &str> {
+    delimited(
+        multispace1,
+        alt((
+            tag_no_case("AND"),
+            tag_no_case("OR"),
+        )),
+        multispace1
+    )(input)
 }
 
-fn parse_single_clause(input: &str) -> IResult<&str, WhereType> {
+fn parse_parenthesized(input: &str) -> IResult<&str, WhereType> {
+    let (input, _) = tag("(")(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, expr) = parse_where_expression(input)?;
+    let (input, _) = multispace0(input)?;
+    let (input, _) = tag(")")(input)?;
+    Ok((input, expr))
+}
+
+fn parse_simple_where(input: &str) -> IResult<&str, WhereType> {
     alt((
-        // Try parenthesized expression first
-        map(
-            delimited(
-                tuple((tag("("), multispace0)),
-                parse_where_expression,
-                tuple((multispace0, tag(")")))
-            ),
-            |expr| expr
-        ),
-        // Then try FTS clause as it's more specific
-        map(FTSClause::parse, WhereType::FTS),
-        // Finally try regular clause
+        parse_parenthesized,
+        parse_fts_where_clause,
         map(WhereClause::parse, WhereType::Regular)
     ))(input)
 }
 
-pub fn parse_fts_where(input: &str) -> IResult<&str, WhereType> {
-    let (input, _) = tag_no_case("to_tsvector")(input)?;
-    let (input, _) = tag("(")(input)?;
+pub fn parse_where_expression(input: &str) -> IResult<&str, WhereType> {
+    let (mut input, mut result) = parse_simple_where(input)?;
 
-    // Parse optional language
-    let (input, language) = opt(tuple((
-        delimited(
-            tag("'"),
-            tag_no_case("english"),
-            tag("'"),
-        ),
-        tag(","),
-        multispace0,
-    )))(input)?;
-
-    let (input, col) = Column::parse(input)?;
-
-    let (input, _) = tuple((
-        tag(")"),
-        multispace0,
-        |i| Op::parse(i).map(|(i, _)| (i, ())), // Parse @@ operator
-        multispace0,
-        tag_no_case("to_tsquery"),
-        tag("("),
-    ))(input)?;
-
-    // Parse optional language for query
-    let (input, query_language) = opt(tuple((
-        delimited(
-            tag("'"),
-            tag_no_case("english"),
-            tag("'"),
-        ),
-        tag(","),
-        multispace0,
-    )))(input)?;
-
-    // Parse search query
-    let (input, query_text) = delimited(
-        tag("'"),
-        take_until("'"),
-        tag("'"),
-    )(input)?;
-
-    let (input, _) = tag(")")(input)?;
-
-    let mut query = TSQuery::new(query_text.to_string());
-    
-    // Only set language if it was explicitly specified in either tsvector or tsquery
-    if language.is_some() || query_language.is_some() {
-        query = query.with_language(Language::English);
+    while let Ok((new_input, op)) = parse_binary_op(input) {
+        let (newer_input, right) = parse_simple_where(new_input)?;
+        result = match op.to_uppercase().as_str() {
+            "AND" => WhereType::And(Box::new(result), Box::new(right)),
+            "OR" => WhereType::Or(Box::new(result), Box::new(right)),
+            _ => unreachable!(),
+        };
+        input = newer_input;
     }
 
-    // Detect if we need to use Raw query type (when we have boolean operators)
-    let query_type = if query_text.contains('&') || query_text.contains('|') || query_text.contains('!') {
-        QueryType::Raw
-    } else {
-        QueryType::Plain
-    };
+    Ok((input, result))
+}
 
-    Ok((input, WhereType::FTS(FTSClause::new(col, query.text)
-        .with_query_type(query_type)
-        .with_language(query.language.unwrap_or_default()))))
+pub fn parse_fts_where_clause(input: &str) -> IResult<&str, WhereType> {
+    let (input, clause) = FTSClause::parse(input)?;
+    Ok((input, WhereType::FTS(clause)))
 }
 
 #[cfg(test)]
@@ -318,6 +242,47 @@ mod tests {
                 }
             }
             _ => panic!("Expected AND clause"),
+        }
+    }
+
+    #[test]
+    fn test_parse_complex_where_with_parentheses() {
+        let input = "WHERE (age > 35 AND status = 'active') OR (country = 'UK' AND year = 2021)";
+        let (remaining, where_type) = parse_where_clause(input).unwrap();
+        assert_eq!(remaining, "");
+        match where_type {
+            WhereType::Or(left, right) => {
+                match (*left, *right) {
+                    (WhereType::And(left_and1, right_and1), WhereType::And(left_and2, right_and2)) => {
+                        // Check first AND condition
+                        match (*left_and1, *right_and1) {
+                            (WhereType::Regular(left_clause), WhereType::Regular(right_clause)) => {
+                                assert_eq!(left_clause.col_name, "age");
+                                assert_eq!(left_clause.operator, Op::GreaterThan);
+                                assert_eq!(left_clause.value, DataValue::Integer(35));
+                                assert_eq!(right_clause.col_name, "status");
+                                assert_eq!(right_clause.operator, Op::Equal);
+                                assert_eq!(right_clause.value, DataValue::Text("active".to_string()));
+                            }
+                            _ => panic!("Expected two Regular clauses in first AND"),
+                        }
+                        // Check second AND condition
+                        match (*left_and2, *right_and2) {
+                            (WhereType::Regular(left_clause), WhereType::Regular(right_clause)) => {
+                                assert_eq!(left_clause.col_name, "country");
+                                assert_eq!(left_clause.operator, Op::Equal);
+                                assert_eq!(left_clause.value, DataValue::Text("UK".to_string()));
+                                assert_eq!(right_clause.col_name, "year");
+                                assert_eq!(right_clause.operator, Op::Equal);
+                                assert_eq!(right_clause.value, DataValue::Integer(2021));
+                            }
+                            _ => panic!("Expected two Regular clauses in second AND"),
+                        }
+                    }
+                    _ => panic!("Expected two AND clauses"),
+                }
+            }
+            _ => panic!("Expected OR clause"),
         }
     }
 }

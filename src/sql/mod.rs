@@ -9,4 +9,5 @@ pub mod statements;
 pub mod table_reference;
 pub mod data_type;
 pub mod constraints;
+pub mod table;
 pub use self::statements::Statement;

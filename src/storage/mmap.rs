@@ -3,6 +3,7 @@ use crate::sql::data_value::DataValue;
 use crate::error::ReefDBError;
 use crate::indexes::{IndexManager, IndexType};
 use crate::indexes::index_manager::{IndexUpdate, DefaultIndexManager};
+use crate::fts::text_processor::TsVector;
 use memmap2::{MmapMut, MmapOptions};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -104,13 +105,13 @@ impl MmapStorage {
 
     fn get_default_value(data_type: &DataType) -> DataValue {
         match data_type {
-            DataType::Text => DataValue::Text(String::new()),
             DataType::Integer => DataValue::Integer(0),
-            DataType::TSVector => DataValue::Text(String::new()),
-            DataType::Boolean => DataValue::Boolean(false),
             DataType::Float => DataValue::Float(0.0),
-            DataType::Date => DataValue::Date(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
-            DataType::Timestamp => DataValue::Timestamp(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap()),
+            DataType::Boolean => DataValue::Boolean(false),
+            DataType::Text => DataValue::Text("".to_string()),
+            DataType::Date => DataValue::Date("1970-01-01".to_string()),
+            DataType::Timestamp => DataValue::Timestamp("1970-01-01 00:00:00".to_string()),
+            DataType::TSVector => DataValue::TSVector(TsVector::new(vec![])),
             DataType::Null => DataValue::Null,
         }
     }

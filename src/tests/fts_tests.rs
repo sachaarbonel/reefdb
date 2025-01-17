@@ -72,12 +72,13 @@ fn test_full_text_search_e2e() -> Result<(), ReefDBError> {
     }
 
     // TODO: Future improvements for full-text search
-    // Test Case 6: Ranking results (not yet implemented)
-    // if let ReefDBResult::Select(results) = db.query(
-    //     "SELECT id,title,ts_rank(to_tsvector(content),to_tsquery('rust')) as rank FROM articles WHERE to_tsvector(content) @@ to_tsquery('rust') ORDER BY rank DESC"
-    // )? {
-    //     assert_eq!(results.len(), 3); // Should match articles 1, 2, and 4 in order of relevance
-    // }
+    // Test Case 6: Ranking results
+    let query = "SELECT id,title,ts_rank(to_tsvector(content),to_tsquery('rust')) as rank FROM articles WHERE to_tsvector(content) @@ to_tsquery('rust')";
+    if let ReefDBResult::Select(results) = db.query(query)? {
+        assert_eq!(results.len(), 3); // Articles 1, 2, and 4 contain 'rust'
+        // Check that the rank values exist
+        assert!(results.iter().all(|(_, values)| values.len() == 3));
+    }
 
     // Test Case 7: Prefix matching (not yet implemented)
     // if let ReefDBResult::Select(results) = db.query(

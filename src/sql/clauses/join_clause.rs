@@ -1,8 +1,9 @@
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case},
-    character::complete::{multispace0, multispace1, alphanumeric1},
-    combinator::{opt, value},
+    character::complete::{multispace0, multispace1, alphanumeric1, alpha1},
+    combinator::{opt, value, recognize},
+    multi::many0,
     sequence::{preceded, tuple},
     IResult,
 };
@@ -60,10 +61,10 @@ impl JoinClause {
         let (input, _) = multispace1(input)?;
         let (input, _) = tag_no_case("JOIN")(input)?;
         let (input, _) = multispace1(input)?;
-        let (input, table_name) = alphanumeric1(input)?;
+        let (input, table_name) = identifier(input)?;
         let (input, alias) = opt(preceded(
             tuple((multispace1, tag_no_case("AS"), multispace1)),
-            alphanumeric1
+            identifier
         ))(input)?;
         let (input, _) = multispace1(input)?;
         let (input, _) = tag_no_case("ON")(input)?;
@@ -86,6 +87,15 @@ impl JoinClause {
             },
         ))
     }
+}
+
+fn identifier(input: &str) -> IResult<&str, &str> {
+    recognize(
+        tuple((
+            alpha1,
+            many0(alt((alphanumeric1, tag("_"))))
+        ))
+    )(input)
 }
 
 #[cfg(test)]

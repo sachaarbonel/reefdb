@@ -386,13 +386,13 @@ impl Storage for OnDiskStorage {
             schema.push(column_def.clone());
             // Add default value for the new column in all existing rows
             let default_value = match column_def.data_type {
-                DataType::Text => DataValue::Text(String::new()),
                 DataType::Integer => DataValue::Integer(0),
-                DataType::TSVector => DataValue::Text(String::new()),
-                DataType::Boolean => DataValue::Boolean(false),
                 DataType::Float => DataValue::Float(0.0),
-                DataType::Date => DataValue::Date(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
-                DataType::Timestamp => DataValue::Timestamp(chrono::NaiveDateTime::from_timestamp_opt(0, 0).unwrap()),
+                DataType::Boolean => DataValue::Boolean(false),
+                DataType::Text => DataValue::Text("".to_string()),
+                DataType::Date => DataValue::Date("1970-01-01".to_string()),
+                DataType::Timestamp => DataValue::Timestamp("1970-01-01 00:00:00".to_string()),
+                DataType::TSVector => DataValue::Text("".to_string()),
                 DataType::Null => DataValue::Null,
             };
             for row in data.iter_mut() {

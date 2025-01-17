@@ -2,6 +2,10 @@ use crate::sql::data_value::DataValue;
 use crate::error::ReefDBError;
 use crate::functions::{Function, FunctionArg, FunctionArgType, FunctionReturnType, FunctionRegistry};
 use std::fmt;
+use crate::sql::clauses::full_text_search::ranking::{TSRanking, NORM_LENGTH};
+use crate::fts::text_processor::{TextProcessor, TsVector, ProcessedQuery, TSQuery};
+use crate::fts::text_processor_impl::DefaultTextProcessor;
+use crate::fts::ranking::{RankingSystem, BM25Ranking, RankingConfig};
 
 impl fmt::Display for DataValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -12,7 +16,10 @@ impl fmt::Display for DataValue {
             DataValue::Float(fl) => write!(f, "{}", fl),
             DataValue::Date(d) => write!(f, "{}", d),
             DataValue::Timestamp(t) => write!(f, "{}", t),
+            DataValue::TSVector(v) => write!(f, "{}", v),
+            DataValue::TSQuery(q) => write!(f, "{}", q),
             DataValue::Null => write!(f, "NULL"),
+            DataValue::Function { name, args } => write!(f, "Function({:?}, {:?})", name, args),
         }
     }
 }
@@ -25,10 +32,12 @@ pub fn register_builtins(registry: &mut FunctionRegistry) -> Result<(), ReefDBEr
             FunctionArg {
                 name: "str1".to_string(),
                 arg_type: FunctionArgType::String,
+                is_optional: false,
             },
             FunctionArg {
                 name: "str2".to_string(),
                 arg_type: FunctionArgType::String,
+                is_optional: false,
             },
         ],
         return_type: FunctionReturnType::String,
@@ -48,10 +57,12 @@ pub fn register_builtins(registry: &mut FunctionRegistry) -> Result<(), ReefDBEr
             FunctionArg {
                 name: "a".to_string(),
                 arg_type: FunctionArgType::Integer,
+                is_optional: false,
             },
             FunctionArg {
                 name: "b".to_string(),
                 arg_type: FunctionArgType::Integer,
+                is_optional: false,
             },
         ],
         return_type: FunctionReturnType::Integer,
@@ -70,10 +81,12 @@ pub fn register_builtins(registry: &mut FunctionRegistry) -> Result<(), ReefDBEr
             FunctionArg {
                 name: "a".to_string(),
                 arg_type: FunctionArgType::Integer,
+                is_optional: false,
             },
             FunctionArg {
                 name: "b".to_string(),
                 arg_type: FunctionArgType::Integer,
+                is_optional: false,
             },
         ],
         return_type: FunctionReturnType::Integer,
@@ -86,6 +99,84 @@ pub fn register_builtins(registry: &mut FunctionRegistry) -> Result<(), ReefDBEr
         },
     })?;
 
+    // Full-text search functions
+    registry.register(Function {
+        name: "to_tsvector".to_string(),
+        args: vec![
+            FunctionArg {
+                name: "text".to_string(),
+                arg_type: FunctionArgType::String,
+                is_optional: false,
+            },
+        ],
+        return_type: FunctionReturnType::TSVector,
+        handler: |args| {
+            if let [DataValue::Text(text)] = args.as_slice() {
+                let processor = DefaultTextProcessor::new();
+                let vector = processor.process_document(text, None);
+                Ok(DataValue::TSVector(vector))
+            } else {
+                Err(ReefDBError::Other("Invalid argument types for to_tsvector".to_string()))
+            }
+        },
+    })?;
+
+    registry.register(Function {
+        name: "to_tsquery".to_string(),
+        args: vec![
+            FunctionArg {
+                name: "query".to_string(),
+                arg_type: FunctionArgType::String,
+                is_optional: false,
+            },
+        ],
+        return_type: FunctionReturnType::TSQuery,
+        handler: |args| {
+            if let [DataValue::Text(query)] = args.as_slice() {
+                let processor = DefaultTextProcessor::new();
+                let processed = processor.process_query(query, None);
+                Ok(DataValue::TSQuery(TSQuery::new(processed.tokens, processed.operators)))
+            } else {
+                Err(ReefDBError::Other("Invalid argument types for to_tsquery".to_string()))
+            }
+        },
+    })?;
+
+    // Full-text search ranking function
+    registry.register(Function {
+        name: "ts_rank".to_string(),
+        args: vec![
+            FunctionArg {
+                name: "tsvector".to_string(),
+                arg_type: FunctionArgType::TSVector,
+                is_optional: false,
+            },
+            FunctionArg {
+                name: "tsquery".to_string(),
+                arg_type: FunctionArgType::TSQuery,
+                is_optional: false,
+            },
+        ],
+        return_type: FunctionReturnType::Float,
+        handler: |args| {
+            if let [DataValue::TSVector(ref vector), DataValue::TSQuery(query)] = args.as_slice() {
+                // Create a ranking system with default configuration
+                let ranking_system = BM25Ranking::new();
+                let config = RankingConfig::default();
+                
+                // Convert TSQuery to ProcessedQuery
+                let processed_query: ProcessedQuery = query.clone().into();
+                
+                // Calculate the rank using the ProcessedQuery
+                let rank = ranking_system.rank(vector, &processed_query, &config);
+                
+                Ok(DataValue::Float(rank))
+            } else {
+                Err(ReefDBError::Other("Invalid argument types for ts_rank".to_string()))
+            }
+        },
+    })?;
+
     // Type conversion functions
     registry.register(Function {
         name: "to_string".to_string(),
@@ -93,6 +184,7 @@ pub fn register_builtins(registry: &mut FunctionRegistry) -> Result<(), ReefDBEr
             FunctionArg {
                 name: "value".to_string(),
                 arg_type: FunctionArgType::Any,
+                is_optional: false,
             },
         ],
         return_type: FunctionReturnType::String,

@@ -1,8 +1,9 @@
 use std::collections::HashSet;
+use std::fmt;
 use serde::{Deserialize, Serialize};
 use crate::sql::clauses::full_text_search::weight::TextWeight;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum QueryOperator {
     And,
     Or,
@@ -11,7 +12,7 @@ pub enum QueryOperator {
     Proximity(Vec<Token>, usize),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Token {
     pub text: String,
     pub position: usize,
@@ -29,7 +30,7 @@ pub enum TokenType {
     Symbol,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TsVector {
     pub tokens: Vec<Token>,
     pub positions: Vec<usize>,
@@ -70,6 +71,15 @@ impl TsVector {
     }
 }
 
+impl fmt::Display for TsVector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tokens_str: Vec<String> = self.tokens.iter()
+            .map(|t| format!("{}:{}", t.text, t.position))
+            .collect();
+        write!(f, "{}", tokens_str.join(" "))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProcessedDocument {
     pub tokens: Vec<Token>,
@@ -80,6 +90,45 @@ pub struct ProcessedDocument {
 pub struct ProcessedQuery {
     pub tokens: Vec<Token>,
     pub operators: Vec<QueryOperator>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TSQuery {
+    pub tokens: Vec<Token>,
+    pub operators: Vec<QueryOperator>,
+}
+
+impl TSQuery {
+    pub fn new(tokens: Vec<Token>, operators: Vec<QueryOperator>) -> Self {
+        Self { tokens, operators }
+    }
+}
+
+impl fmt::Display for TSQuery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tokens_str: Vec<String> = self.tokens.iter()
+            .map(|t| t.text.clone())
+            .collect();
+        write!(f, "{}", tokens_str.join(" "))
+    }
+}
+
+impl From<ProcessedQuery> for TSQuery {
+    fn from(query: ProcessedQuery) -> Self {
+        Self {
+            tokens: query.tokens,
+            operators: query.operators,
+        }
+    }
+}
+
+impl From<TSQuery> for ProcessedQuery {
+    fn from(query: TSQuery) -> Self {
+        Self {
+            tokens: query.tokens,
+            operators: query.operators,
+        }
+    }
 }
 
 pub trait TextProcessor: Send + Sync {

@@ -17,6 +17,32 @@ pub struct Function {
 pub struct FunctionArg {
     pub name: String,
     pub arg_type: FunctionArgType,
+    pub is_optional: bool,
+}
+
+impl Default for FunctionArg {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            arg_type: FunctionArgType::Any,
+            is_optional: false,
+        }
+    }
+}
+
+impl FunctionArg {
+    pub fn new(name: String, arg_type: FunctionArgType) -> Self {
+        Self {
+            name,
+            arg_type,
+            is_optional: false,
+        }
+    }
+
+    pub fn optional(mut self) -> Self {
+        self.is_optional = true;
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +52,8 @@ pub enum FunctionArgType {
     Float,
     Boolean,
     Any,
+    TSVector,
+    TSQuery,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +63,8 @@ pub enum FunctionReturnType {
     Float,
     Boolean,
     Any,
+    TSVector,
+    TSQuery,
 }
 
 pub type FunctionHandler = fn(Vec<DataValue>) -> Result<DataValue, ReefDBError>;
@@ -68,15 +98,52 @@ impl FunctionRegistry {
             ReefDBError::Other(format!("Function {} not found", name))
         })?;
 
-        if args.len() != function.args.len() {
+        // Count required arguments (non-optional)
+        let required_args = function.args.iter().filter(|arg| !arg.is_optional).count();
+        let max_args = function.args.len();
+
+        // Validate argument count
+        if args.len() < required_args || args.len() > max_args {
             return Err(ReefDBError::Other(format!(
-                "Function {} expects {} arguments, got {}",
+                "Function '{}' expects {} to {} arguments, got {}. Required arguments: {}",
                 name,
-                function.args.len(),
-                args.len()
+                required_args,
+                max_args,
+                args.len(),
+                function.args.iter()
+                    .filter(|arg| !arg.is_optional)
+                    .map(|arg| arg.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         }
 
+        // Validate argument types
+        for (i, (arg, provided)) in function.args.iter().zip(args.iter()).enumerate() {
+            let type_matches = match (provided, &arg.arg_type) {
+                (DataValue::Text(_), FunctionArgType::String) => true,
+                (DataValue::Integer(_), FunctionArgType::Integer) => true,
+                (DataValue::Float(_), FunctionArgType::Float) => true,
+                (DataValue::Boolean(_), FunctionArgType::Boolean) => true,
+                (DataValue::TSVector(_), FunctionArgType::TSVector) => true,
+                (DataValue::TSQuery(_), FunctionArgType::TSQuery) => true,
+                (_, FunctionArgType::Any) => true,
+                _ => false,
+            };
+
+            if !type_matches {
+                return Err(ReefDBError::Other(format!(
+                    "Function '{}': argument '{}' (position {}) expects type {:?}, got {:?}",
+                    name,
+                    arg.name,
+                    i + 1,
+                    arg.arg_type,
+                    provided
+                )));
+            }
+        }
+
+        // Call the function handler with validated arguments
         (function.handler)(args)
     }
 
@@ -100,10 +167,12 @@ mod tests {
                 FunctionArg {
                     name: "a".to_string(),
                     arg_type: FunctionArgType::Integer,
+                    is_optional: false,
                 },
                 FunctionArg {
                     name: "b".to_string(),
                     arg_type: FunctionArgType::Integer,
+                    is_optional: false,
                 },
             ],
             return_type: FunctionReturnType::Integer,
@@ -126,5 +195,85 @@ mod tests {
         ).unwrap();
 
         assert_eq!(result, DataValue::Integer(8));
+    }
+
+    #[test]
+    fn test_function_error_handling() {
+        let mut registry = FunctionRegistry::new();
+        
+        // Register a function with optional arguments
+        let concat_with_sep = Function {
+            name: "concat_with_sep".to_string(),
+            args: vec![
+                FunctionArg {
+                    name: "str1".to_string(),
+                    arg_type: FunctionArgType::String,
+                    is_optional: false,
+                },
+                FunctionArg {
+                    name: "str2".to_string(),
+                    arg_type: FunctionArgType::String,
+                    is_optional: false,
+                },
+                FunctionArg {
+                    name: "separator".to_string(),
+                    arg_type: FunctionArgType::String,
+                    is_optional: true,
+                },
+            ],
+            return_type: FunctionReturnType::String,
+            handler: |args| {
+                match args.as_slice() {
+                    [DataValue::Text(s1), DataValue::Text(s2), DataValue::Text(sep)] => {
+                        Ok(DataValue::Text(format!("{}{}{}", s1, sep, s2)))
+                    }
+                    [DataValue::Text(s1), DataValue::Text(s2)] => {
+                        Ok(DataValue::Text(format!("{} {}", s1, s2)))
+                    }
+                    _ => Err(ReefDBError::Other("Invalid argument types".to_string()))
+                }
+            },
+        };
+
+        registry.register(concat_with_sep).unwrap();
+
+        // Test: Too few arguments
+        let err = registry.call(
+            "concat_with_sep",
+            vec![DataValue::Text("Hello".to_string())]
+        ).unwrap_err();
+        assert!(err.to_string().contains("expects 2 to 3 arguments, got 1"));
+        assert!(err.to_string().contains("Required arguments: str1, str2"));
+
+        // Test: Wrong argument type
+        let err = registry.call(
+            "concat_with_sep",
+            vec![
+                DataValue::Text("Hello".to_string()),
+                DataValue::Integer(42),
+            ]
+        ).unwrap_err();
+        assert!(err.to_string().contains("argument 'str2' (position 2) expects type String"));
+
+        // Test: Optional argument works
+        let result = registry.call(
+            "concat_with_sep",
+            vec![
+                DataValue::Text("Hello".to_string()),
+                DataValue::Text("World".to_string()),
+            ]
+        ).unwrap();
+        assert_eq!(result, DataValue::Text("Hello World".to_string()));
+
+        // Test: Optional argument provided
+        let result = registry.call(
+            "concat_with_sep",
+            vec![
+                DataValue::Text("Hello".to_string()),
+                DataValue::Text("World".to_string()),
+                DataValue::Text(", ".to_string()),
+            ]
+        ).unwrap();
+        assert_eq!(result, DataValue::Text("Hello, World".to_string()));
     }
 } 

@@ -2,7 +2,7 @@ use nom::{
     bytes::complete::{tag, tag_no_case},
     character::complete::{multispace0, multispace1, alphanumeric1},
     combinator::{map, opt},
-    sequence::{delimited, tuple},
+    sequence::{delimited, tuple, preceded},
     multi::separated_list1,
     IResult,
 };
@@ -50,12 +50,17 @@ impl UpdateStatement {
             )
         )(input)?;
 
-        let (input, where_clause) = opt(parse_where_clause)(input)?;
+        let (input, where_clause) = opt(preceded(
+            multispace1,
+            parse_where_clause
+        ))(input)?;
+
+        let (input, _) = multispace0(input)?;
 
         Ok((input, Statement::Update(UpdateStatement::UpdateTable(
             table_name.to_string(),
             updates,
-            where_clause,
+            where_clause
         ))))
     }
 }

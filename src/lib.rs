@@ -1,3 +1,6 @@
+use functions::{register_builtins, FunctionRegistry};
+use sql::column::ColumnType;
+
 use crate::sql::table_reference::TableReference;
 use crate::sql::data_type::DataType;
 use crate::sql::{
@@ -59,6 +62,8 @@ pub type MmapReefDB = ReefDB<storage::mmap::MmapStorage, fts::default::DefaultSe
 
 impl InMemoryReefDB {
     pub fn create_in_memory() -> Result<Self, ReefDBError> {
+        let mut function_registry = FunctionRegistry::new();
+        register_builtins(&mut function_registry)?;
         let mut db = ReefDB {
             tables: TableStorage::new(),
             inverted_index: fts::default::DefaultSearchIdx::new(),
@@ -69,6 +74,7 @@ impl InMemoryReefDB {
             autocommit_isolation_level: IsolationLevel::ReadCommitted,
             mvcc_manager: Arc::new(Mutex::new(MVCCManager::new())),
             current_transaction_id: None,
+            function_registry: function_registry,
         };
         db.transaction_manager = Some(TransactionManager::create(
             db.clone(),
@@ -106,6 +112,7 @@ where
     pub(crate) autocommit_isolation_level: IsolationLevel,
     pub(crate) mvcc_manager: Arc<Mutex<MVCCManager>>,
     pub(crate) current_transaction_id: Option<u64>,
+    pub(crate) function_registry: FunctionRegistry,
 }
 
 impl<S: Storage + IndexManager + Clone + Any, FTS: Search + Clone> ReefDB<S, FTS>
@@ -113,6 +120,8 @@ where
     FTS::NewArgs: Clone + Default,
 {
     fn create_with_args(storage: S, fts_args: FTS::NewArgs) -> Self {
+        let mut function_registry = FunctionRegistry::new();
+        register_builtins(&mut function_registry).unwrap();
         let mut db = ReefDB {
             tables: TableStorage::new(),
             inverted_index: FTS::new(fts_args),
@@ -123,6 +132,7 @@ where
             autocommit_isolation_level: IsolationLevel::ReadCommitted,
             mvcc_manager: Arc::new(Mutex::new(MVCCManager::new())),
             current_transaction_id: None,
+            function_registry: function_registry,
         };
 
         let transaction_manager = Some(TransactionManager::create(
@@ -261,10 +271,21 @@ where
                     if col.name == "*" {
                         selected_values.extend(row.iter().cloned());
                     } else {
-                        let col_idx = schema.iter()
-                            .position(|c| c.name == col.name)
-                            .ok_or_else(|| ReefDBError::ColumnNotFound(col.name.clone()))?;
-                        selected_values.push(row[col_idx].clone());
+                        match &col.column_type {
+                            ColumnType::Regular(_) => {
+                                let col_idx = schema.iter()
+                                    .position(|c| c.name == col.name)
+                                    .ok_or_else(|| ReefDBError::ColumnNotFound(col.name.clone()))?;
+                                selected_values.push(row[col_idx].clone());
+                            }
+                            ColumnType::Function(name, args) => {
+                                let value = self.evaluate_column(col, row, schema)?;
+                                selected_values.push(value);
+                            }
+                            ColumnType::Wildcard => {
+                                selected_values.extend(row.iter().cloned());
+                            }
+                        }
                     }
                 }
                 result.push((i, selected_values));
@@ -344,6 +365,37 @@ where
         Ok(())
     }
 
+    
+    fn evaluate_column(&self, column: &Column, row: &[DataValue], schema: &[ColumnDef]) -> Result<DataValue, ReefDBError> {
+        match &column.column_type {
+            ColumnType::Regular(name) => {
+                if let Some(idx) = schema.iter().position(|c| c.name == *name) {
+                    Ok(row[idx].clone())
+                } else {
+                    Err(ReefDBError::ColumnNotFound(name.clone()))
+                }
+            }
+            ColumnType::Function(name, args) => {
+                // Evaluate function arguments
+                let mut evaluated_args = Vec::new();
+                for arg in args {
+                    let arg_value = match arg {
+                        DataValue::Text(s) => Ok(DataValue::Text(s.clone())),
+                        DataValue::Function { name, args } => self.function_registry.call(name, args.clone()),
+                        _ => Ok(arg.clone()),
+                    }?;
+                    evaluated_args.push(arg_value);
+                }
+                
+                // Call function
+                self.function_registry.call(name, evaluated_args)
+            }
+            ColumnType::Wildcard => {
+                Err(ReefDBError::Other("Cannot evaluate wildcard in expression".to_string()))
+            }
+        }
+    }
+
     fn evaluate_where_clause(
         &self,
         where_clause: &WhereType,
@@ -355,30 +407,54 @@ where
     ) -> Result<bool, ReefDBError> {
         match where_clause {
             WhereType::Regular(clause) => {
-                let (col_idx, row_to_check) = if let Some(table) = &clause.table {
+                let (col_idx, row_to_check, schema_to_use) = if let Some(table) = &clause.table {
                     if table == main_table {
                         let idx = schema.iter()
                             .position(|c| c.name == clause.col_name)
                             .ok_or_else(|| ReefDBError::ColumnNotFound(format!("{}.{}", table, clause.col_name)))?;
-                        (idx, row)
+                        (idx, row, schema)
                     } else {
                         let idx = join_schema.iter()
                             .position(|c| c.name == clause.col_name)
                             .ok_or_else(|| ReefDBError::ColumnNotFound(format!("{}.{}", table, clause.col_name)))?;
-                        (idx, join_row)
+                        (idx, join_row, join_schema)
                     }
                 } else {
                     // If no table is specified, try both schemas in order
                     if let Some(idx) = schema.iter().position(|c| c.name == clause.col_name) {
-                        (idx, row)
+                        (idx, row, schema)
                     } else if let Some(idx) = join_schema.iter().position(|c| c.name == clause.col_name) {
-                        (idx, join_row)
+                        (idx, join_row, join_schema)
                     } else {
                         return Err(ReefDBError::ColumnNotFound(clause.col_name.clone()));
                     }
                 };
 
-                Ok(clause.operator.evaluate(&row_to_check[col_idx], &clause.value))
+                // Handle function calls in the value
+                let evaluated_value = match &clause.value {
+                    DataValue::Function { name, args } => {
+                        let mut evaluated_args = Vec::new();
+                        for arg in args {
+                            let arg_value = match arg {
+                                DataValue::Text(col_name) => {
+                                    // Treat text values as column references
+                                    let col = Column {
+                                        name: col_name.clone(),
+                                        table: None,
+                                        column_type: ColumnType::Regular(col_name.clone()),
+                                    };
+                                    self.evaluate_column(&col, row_to_check, schema_to_use)?
+                                }
+                                _ => arg.clone(),
+                            };
+                            evaluated_args.push(arg_value);
+                        }
+                        self.function_registry.call(name, evaluated_args)?
+                    }
+                    _ => clause.value.clone(),
+                };
+
+                Ok(clause.operator.evaluate(&row_to_check[col_idx], &evaluated_value))
             }
             WhereType::FTS(clause) => {
                 let table_name = if let Some(table) = &clause.column.table {
@@ -413,6 +489,20 @@ where
             }
         }
     }
+
+    fn evaluate_function(&self, name: &str, args: &[DataValue]) -> Result<DataValue, ReefDBError> {
+        match &args[0] {
+            DataValue::Function { name, args } => {
+                // Recursively evaluate nested function
+                let evaluated_args = args.iter()
+                    .map(|arg| self.evaluate_function(name, args))
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.function_registry.call(name, evaluated_args)
+            }
+            _ => self.function_registry.call(name, args.to_vec()),
+        }
+    }
+
 
     fn handle_update(
         &mut self,
