@@ -38,6 +38,14 @@ fn test_full_text_search_e2e() -> Result<(), ReefDBError> {
         assert_eq!(results.columns[1].name, "title");
         assert_eq!(results.columns[1].data_type, DataType::Text);
         assert_eq!(results.columns[1].table, Some("articles".to_string()));
+
+        // Verify the expected articles are returned
+        let expected_titles = vec!["Rust Programming", "Web Development", "Rust Web"];
+        for title in expected_titles {
+            assert!(results.rows.iter().any(|(_, row)| {
+                row[1] == DataValue::Text(title.to_string())
+            }), "Missing article: {}", title);
+        }
     } else {
         panic!("Expected Select result");
     }
@@ -82,6 +90,14 @@ fn test_full_text_search_e2e() -> Result<(), ReefDBError> {
         assert_eq!(results.columns[1].name, "title");
         assert_eq!(results.columns[1].data_type, DataType::Text);
         assert_eq!(results.columns[1].table, Some("articles".to_string()));
+
+        // Verify the expected articles are returned
+        let expected_titles = vec!["Web Development", "Rust Web"];
+        for title in expected_titles {
+            assert!(results.rows.iter().any(|(_, row)| {
+                row[1] == DataValue::Text(title.to_string())
+            }), "Missing article: {}", title);
+        }
     } else {
         panic!("Expected Select result");
     }
@@ -100,6 +116,14 @@ fn test_full_text_search_e2e() -> Result<(), ReefDBError> {
         assert_eq!(results.columns[1].name, "title");
         assert_eq!(results.columns[1].data_type, DataType::Text);
         assert_eq!(results.columns[1].table, Some("articles".to_string()));
+
+        // Verify the expected articles are returned
+        let expected_titles = vec!["Web Development", "Database Design", "Rust Web"];
+        for title in expected_titles {
+            assert!(results.rows.iter().any(|(_, row)| {
+                row[1] == DataValue::Text(title.to_string())
+            }), "Missing article: {}", title);
+        }
     } else {
         panic!("Expected Select result");
     }
@@ -118,6 +142,14 @@ fn test_full_text_search_e2e() -> Result<(), ReefDBError> {
         assert_eq!(results.columns[1].name, "title");
         assert_eq!(results.columns[1].data_type, DataType::Text);
         assert_eq!(results.columns[1].table, Some("articles".to_string()));
+
+        // Verify the expected article is returned
+        let expected_titles = vec!["Rust Programming"];
+        for title in expected_titles {
+            assert!(results.rows.iter().any(|(_, row)| {
+                row[1] == DataValue::Text(title.to_string())
+            }), "Missing article: {}", title);
+        }
     } else {
         panic!("Expected Select result");
     }
@@ -140,8 +172,34 @@ fn test_full_text_search_e2e() -> Result<(), ReefDBError> {
         assert_eq!(results.columns[2].table, None);
         assert!(results.columns[2].nullable);
         
-        // Check that the rank values exist
-        assert!(results.rows.iter().all(|(_, values)| values.len() == 3));
+        // Verify the expected articles are returned
+        let expected_titles = vec!["Rust Programming", "Web Development", "Rust Web"];
+        for title in expected_titles {
+            assert!(results.rows.iter().any(|(_, row)| {
+                row[1] == DataValue::Text(title.to_string())
+            }), "Missing article: {}", title);
+        }
+        
+        // Check that the rank values exist and are valid
+        assert!(results.rows.iter().all(|(_, values)| {
+            values.len() == 3 && 
+            matches!(values[2], DataValue::Float(_))
+        }));
+
+        // Verify that articles with 'Rust' in the title have higher rank
+        let mut ranked_articles: Vec<_> = results.rows.iter()
+            .filter_map(|(_, values)| {
+                if let (DataValue::Text(title), DataValue::Float(rank)) = (&values[1], &values[2]) {
+                    Some((title.clone(), *rank))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        ranked_articles.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Articles with "Rust" in title should be ranked higher
+        assert!(ranked_articles.iter().any(|(title, _)| title.contains("Rust")));
     } else {
         panic!("Expected Select result");
     }
