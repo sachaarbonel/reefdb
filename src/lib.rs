@@ -1,8 +1,10 @@
 use functions::{register_builtins, FunctionRegistry};
+use result::QueryResult;
 use sql::column::ColumnType;
 
 use crate::sql::table_reference::TableReference;
 use crate::sql::data_type::DataType;
+use crate::result::ColumnInfo;
 use crate::sql::{
     statements::{
         Statement,
@@ -240,13 +242,31 @@ where
         let (schema, data) = self.get_table_schema(&table_ref.name)?;
         
         let mut result = Vec::new();
+        
+        // Get joined schemas if needed
+        let mut joined_schemas = Vec::new();
+        if !joins.is_empty() {
+            for join in &joins {
+                let (join_schema, _) = self.get_table_schema(&join.table_ref.name)?;
+                joined_schemas.push((join.table_ref.name.as_str(), join_schema.as_slice()));
+            }
+        }
+
+        // Process rows
         if joins.is_empty() {
             self.handle_simple_select(&table_ref.name, schema, data, &columns, where_clause, &mut result)?;
         } else {
             self.handle_join_select(&table_ref.name, schema, data, &columns, where_clause, &joins, &mut result)?;
         }
+
+        // Create column info
+        let column_info = if joins.is_empty() {
+            ColumnInfo::from_schema_and_columns(schema, &columns, &table_ref.name)?
+        } else {
+            ColumnInfo::from_joined_schemas(schema, &table_ref.name, &joined_schemas, &columns)?
+        };
         
-        Ok(ReefDBResult::Select(result))
+        Ok(ReefDBResult::Select(QueryResult::with_columns(result, column_info)))
     }
 
     fn handle_simple_select(

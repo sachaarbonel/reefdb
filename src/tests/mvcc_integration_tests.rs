@@ -45,7 +45,7 @@ mod tests {
         match &balance_before_commit {
             crate::result::ReefDBResult::Select(rows) => {
                 println!("Number of rows returned: {}", rows.len());
-                for (i, row) in rows.iter().enumerate() {
+                for (i, row) in rows.rows.iter().enumerate() {
                     println!("Row {}: {:?}", i, row);
                 }
             },
@@ -64,7 +64,7 @@ mod tests {
         match &balance_after_commit {
             crate::result::ReefDBResult::Select(rows) => {
                 println!("Number of rows returned: {}", rows.len());
-                for (i, row) in rows.iter().enumerate() {
+                for (i, row) in rows.rows.iter().enumerate() {
                     println!("Row {}: {:?}", i, row);
                 }
             },
@@ -84,10 +84,10 @@ mod tests {
         match &final_balance {
             crate::result::ReefDBResult::Select(rows) => {
                 println!("Number of rows returned: {}", rows.len());
-                for (i, row) in rows.iter().enumerate() {
+                for (i, row) in rows.rows.iter().enumerate() {
                     println!("Row {}: {:?}", i, row);
                 }
-                assert_eq!(rows[0].1[0], DataValue::Integer(900), "Final balance should be 900 after update");
+                assert_eq!(rows[0][0], DataValue::Integer(900), "Final balance should be 900 after update");
             },
             _ => panic!("Expected Select result"),
         }
@@ -119,7 +119,7 @@ mod tests {
             Statement::parse("SELECT balance FROM accounts WHERE id = 1").unwrap().1)?;
         
         if let ReefDBResult::Select(rows) = result {
-            assert_eq!(rows[0].1[0], DataValue::Integer(100));
+            assert_eq!(rows[0][0], DataValue::Integer(100));
         } else {
             panic!("Expected Select result");
         }
@@ -132,7 +132,7 @@ mod tests {
             Statement::parse("SELECT balance FROM accounts WHERE id = 1").unwrap().1)?;
         
         if let ReefDBResult::Select(rows) = result {
-            assert_eq!(rows[0].1[0], DataValue::Integer(200));
+            assert_eq!(rows[0][0], DataValue::Integer(200));
         } else {
             panic!("Expected Select result");
         }

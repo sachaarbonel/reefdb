@@ -30,8 +30,8 @@ fn test_update_basic() -> Result<()> {
     // Verify update
     if let ReefDBResult::Select(rows) = db.query("SELECT * FROM users WHERE id = 1")? {
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1[0], DataValue::Integer(1));
-        assert_eq!(rows[0].1[1], DataValue::Text("Alice Updated".to_string()));
+        assert_eq!(rows[0][0], DataValue::Integer(1));
+        assert_eq!(rows[0][1], DataValue::Text("Alice Updated".to_string()));
     } else {
         panic!("Expected Select result");
     }
@@ -62,7 +62,7 @@ fn test_update_multiple_rows() -> Result<()> {
     // Verify all rows were updated
     if let ReefDBResult::Select(rows) = db.query("SELECT * FROM users")? {
         assert_eq!(rows.len(), 3);
-        for row in rows {
+        for row in rows.rows {
             assert_eq!(row.1[2], DataValue::Text("inactive".to_string()));
         }
     } else {

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use crate::fts::search::Search;
 
+use crate::result::{ColumnInfo, QueryResult};
 use crate::{
     deadlock::DeadlockDetector,
     error::ReefDBError,
@@ -443,11 +444,20 @@ where
 
                 // Get all joined table data upfront
                 let mut joined_tables = Vec::new();
+                let mut joined_schemas = Vec::new();
                 for join in joins.iter() {
                     let joined_table = guard.transaction.reef_db.storage.get_table_ref(&join.table_ref.name)
                         .ok_or_else(|| ReefDBError::TableNotFound(join.table_ref.name.clone()))?;
+                    joined_schemas.push((join.table_ref.name.as_str(), joined_table.0.as_slice()));
                     joined_tables.push((join, (joined_table.0.to_vec(), joined_table.1.to_vec())));
                 }
+
+                // Create column info for all tables
+                let column_info = if joins.is_empty() {
+                    ColumnInfo::from_schema_and_columns(&schema, &columns, &table_ref.name)?
+                } else {
+                    ColumnInfo::from_joined_schemas(&schema, &table_ref.name, &joined_schemas, &columns)?
+                };
 
                 // Drop the guard before getting the MVCC manager
                 drop(guard);
@@ -634,7 +644,7 @@ where
                     }
                 }
 
-                Ok(ReefDBResult::Select(results))
+                Ok(ReefDBResult::Select(QueryResult::with_columns(results, column_info)))
             },
             Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
                 // First get the transaction guard
@@ -780,7 +790,8 @@ where
                 }
 
                 println!("MVCC Debug - Final results count: {}", results.len());
-                Ok(ReefDBResult::Select(results))
+                let column_infos = ColumnInfo::from_schema_and_columns(&schema, &columns, &table_ref.name)?;
+                Ok(ReefDBResult::Select(QueryResult::with_columns(results, column_infos)))
             },
             _ => Err(ReefDBError::Other("Only SELECT statements are supported in read committed mode".to_string())),
         }

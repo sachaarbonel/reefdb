@@ -64,7 +64,7 @@ mod tests {
             ];
 
             for (name, title) in expected_combinations {
-                assert!(rows.iter().any(|(_, row)| {
+                assert!(rows.rows.iter().any(|(_, row)| {
                     row[0] == name && row[1] == title
                 }), "Missing combination: {:?} - {:?}", name, title);
             }
@@ -129,7 +129,7 @@ mod tests {
             ];
 
             for (name, title, year) in expected_combinations {
-                assert!(rows.iter().any(|(_, row)| {
+                assert!(rows.rows.iter().any(|(_, row)| {
                     row[0] == DataValue::Text(name.to_string()) &&
                     row[1] == DataValue::Text(title.to_string()) &&
                     row[2] == DataValue::Integer(year)
@@ -199,7 +199,7 @@ mod tests {
             ];
 
             for (name, title) in expected_combinations {
-                assert!(rows.iter().any(|(_, row)| {
+                assert!(rows.rows.iter().any(|(_, row)| {
                     row[0] == DataValue::Text(name.to_string()) &&
                     row[1] == DataValue::Text(title.to_string())
                 }), "Missing combination: {} - {}", name, title);
@@ -270,7 +270,7 @@ mod tests {
             ];
 
             for (name, title) in expected_combinations {
-                assert!(rows.iter().any(|(_, row)| {
+                assert!(rows.rows.iter().any(|(_, row)| {
                     row[0] == DataValue::Text(name.to_string()) &&
                     row[1] == DataValue::Text(title.to_string())
                 }), "Missing combination: {} - {}", name, title);
@@ -299,7 +299,7 @@ mod tests {
             ];
 
             for (name, title) in expected_combinations {
-                assert!(rows.iter().any(|(_, row)| {
+                assert!(rows.rows.iter().any(|(_, row)| {
                     row[0] == DataValue::Text(name.to_string()) &&
                     row[1] == DataValue::Text(title.to_string())
                 }), "Missing combination: {} - {}", name, title);

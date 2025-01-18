@@ -47,7 +47,7 @@ fn test_add_column() {
     ));
     if let ReefDBResult::Select(rows) = db.execute_statement(stmt).unwrap() {
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1[0], DataValue::Integer(0)); // Default value for new integer column
+        assert_eq!(rows[0][0], DataValue::Integer(0)); // Default value for new integer column
     } else {
         panic!("Expected Select result");
     }
@@ -98,9 +98,9 @@ fn test_drop_column() {
     ));
     if let ReefDBResult::Select(rows) = db.execute_statement(stmt).unwrap() {
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1.len(), 2); // Only id and name columns should remain
-        assert_eq!(rows[0].1[0], DataValue::Integer(1));
-        assert_eq!(rows[0].1[1], DataValue::Text("John".to_string()));
+        assert_eq!(rows[0].len(), 2); // Only id and name columns should remain
+        assert_eq!(rows[0][0], DataValue::Integer(1));
+        assert_eq!(rows[0][1], DataValue::Text("John".to_string()));
     } else {
         panic!("Expected Select result");
     }
@@ -146,7 +146,7 @@ fn test_rename_column() {
     ));
     if let ReefDBResult::Select(rows) = db.execute_statement(stmt).unwrap() {
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1[0], DataValue::Text("John".to_string()));
+        assert_eq!(rows[0][0], DataValue::Text("John".to_string()));
     } else {
         panic!("Expected Select result");
     }

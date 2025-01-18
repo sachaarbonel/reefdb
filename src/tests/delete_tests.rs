@@ -30,8 +30,8 @@ fn test_delete_basic() -> Result<()> {
     // Verify deletion
     if let ReefDBResult::Select(rows) = db.query("SELECT * FROM users")? {
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1[0], DataValue::Integer(2));
-        assert_eq!(rows[0].1[1], DataValue::Text("Bob".to_string()));
+        assert_eq!(rows[0][0], DataValue::Integer(2));
+        assert_eq!(rows[0][1], DataValue::Text("Bob".to_string()));
     } else {
         panic!("Expected Select result");
     }
@@ -62,9 +62,9 @@ fn test_delete_multiple_rows() -> Result<()> {
     // Verify deletion
     if let ReefDBResult::Select(rows) = db.query("SELECT * FROM users")? {
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1[0], DataValue::Integer(3));
-        assert_eq!(rows[0].1[1], DataValue::Text("Charlie".to_string()));
-        assert_eq!(rows[0].1[2], DataValue::Text("active".to_string()));
+        assert_eq!(rows[0][0], DataValue::Integer(3));
+        assert_eq!(rows[0][1], DataValue::Text("Charlie".to_string()));
+        assert_eq!(rows[0][2], DataValue::Text("active".to_string()));
     } else {
         panic!("Expected Select result");
     }

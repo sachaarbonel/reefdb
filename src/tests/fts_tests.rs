@@ -77,7 +77,7 @@ fn test_full_text_search_e2e() -> Result<(), ReefDBError> {
     if let ReefDBResult::Select(results) = db.query(query)? {
         assert_eq!(results.len(), 3); // Articles 1, 2, and 4 contain 'rust'
         // Check that the rank values exist
-        assert!(results.iter().all(|(_, values)| values.len() == 3));
+        assert!(results.rows.iter().all(|(_, values)| values.len() == 3));
     }
 
     // Test Case 7: Prefix matching (not yet implemented)

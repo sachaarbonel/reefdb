@@ -74,7 +74,7 @@ fn test_fts_search_with_select() -> Result<(), ReefDBError> {
     
     if let ReefDBResult::Select(rows) = result {
         assert_eq!(rows.len(), 1); // Should find one matching book
-        if let DataValue::Integer(id) = &rows[0].1[0] {
+        if let DataValue::Integer(id) = &rows[0][0] {
             assert_eq!(*id, 1);
         } else {
             panic!("Expected integer ID");

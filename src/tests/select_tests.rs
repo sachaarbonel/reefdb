@@ -26,8 +26,8 @@ fn test_select_with_where() -> Result<()> {
 
     if let ReefDBResult::Select(rows) = db.query("SELECT * FROM users WHERE id = 1")? {
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1[0], DataValue::Integer(1));
-        assert_eq!(rows[0].1[1], DataValue::Text("Alice".to_string()));
+        assert_eq!(rows[0][0], DataValue::Integer(1));
+        assert_eq!(rows[0][1], DataValue::Text("Alice".to_string()));
     } else {
         panic!("Expected Select result");
     }
@@ -47,10 +47,10 @@ fn test_select_all() -> Result<()> {
     // Test SELECT *
     if let ReefDBResult::Select(rows) = db.query("SELECT * FROM users")? {
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].1[0], DataValue::Integer(1));
-        assert_eq!(rows[0].1[1], DataValue::Text("Alice".to_string()));
-        assert_eq!(rows[1].1[0], DataValue::Integer(2));
-        assert_eq!(rows[1].1[1], DataValue::Text("Bob".to_string()));
+        assert_eq!(rows[0][0], DataValue::Integer(1));
+        assert_eq!(rows[0][1], DataValue::Text("Alice".to_string()));
+        assert_eq!(rows[1][0], DataValue::Integer(2));
+        assert_eq!(rows[1][1], DataValue::Text("Bob".to_string()));
     } else {
         panic!("Expected Select result");
     }

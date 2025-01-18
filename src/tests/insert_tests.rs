@@ -41,7 +41,7 @@ fn test_insert_statement() -> Result<(), ReefDBError> {
     let result = db.execute_statement(Statement::Select(select_stmt))?;
     if let ReefDBResult::Select(rows) = result {
         assert_eq!(rows.len(), 1);
-        let (_, values) = &rows[0];
+        let values = &rows[0];
         assert_eq!(values[0], DataValue::Integer(1));
         assert_eq!(values[1], DataValue::Text("Alice".to_string()));
         assert_eq!(values[2], DataValue::Integer(25));
@@ -106,7 +106,7 @@ fn test_insert_statement() -> Result<(), ReefDBError> {
     let result = db.execute_statement(Statement::Select(select_stmt))?;
     if let ReefDBResult::Select(rows) = result {
         assert_eq!(rows.len(), 3);
-        let values: Vec<_> = rows.into_iter().map(|(_, v)| v).collect();
+        let values: Vec<_> = rows.rows.into_iter().map(|(_, v)| v).collect();
         
         // First row (Alice)
         assert_eq!(values[0][0], DataValue::Integer(1));

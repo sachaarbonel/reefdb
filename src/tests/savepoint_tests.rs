@@ -62,7 +62,7 @@ mod tests {
         
         if let ReefDBResult::Select(rows) = result {
             assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].1[1], DataValue::Text("Alice".to_string()));
+            assert_eq!(rows[0][1], DataValue::Text("Alice".to_string()));
         } else {
             panic!("Expected Select result");
         }
@@ -134,7 +134,7 @@ mod tests {
         
         if let ReefDBResult::Select(rows) = result {
             assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].1[1], DataValue::Text("Alice".to_string()));
+            assert_eq!(rows[0][1], DataValue::Text("Alice".to_string()));
         } else {
             panic!("Expected Select result");
         }
@@ -217,7 +217,7 @@ mod tests {
         
         if let ReefDBResult::Select(rows) = result {
             assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].1[1], DataValue::Text("Alice".to_string()));
+            assert_eq!(rows[0][1], DataValue::Text("Alice".to_string()));
         } else {
             panic!("Expected Select result");
         }
