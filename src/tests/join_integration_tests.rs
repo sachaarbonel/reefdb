@@ -1,9 +1,17 @@
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use crate::{OnDiskReefDB, error::ReefDBError, result::ReefDBResult};
-    use crate::sql::{statements::Statement, data_value::DataValue};
-    use crate::transaction::IsolationLevel;
+    use crate::{
+        error::ReefDBError,
+        result::ReefDBResult,
+        sql::{
+            statements::Statement,
+            data_value::DataValue,
+            data_type::DataType,
+        },
+        transaction::IsolationLevel,
+        InMemoryReefDB,
+    };
 
     type Result<T> = std::result::Result<T, ReefDBError>;
 
@@ -13,31 +21,35 @@ mod tests {
     }
 
     #[test]
-    fn test_inner_join_basic() -> Result<()> {
+    fn test_basic_join() -> Result<()> {
         let kv_path = "join_test_kv.db";
         let index_path = "join_test_index.bin";
 
         cleanup_test_files(kv_path, index_path);
 
-        let mut db = OnDiskReefDB::create_on_disk(kv_path.to_string(), index_path.to_string())?;
+        let mut db = InMemoryReefDB::create_in_memory()?;
 
         // Begin a transaction for setup
         let setup_tx = db.transaction_manager.as_mut().unwrap().begin_transaction(IsolationLevel::Serializable)?;
 
-        // Create and populate tables
-        let stmts = vec![
-            "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)",
-            "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER)",
-            "INSERT INTO authors VALUES (1, 'Alice')",
-            "INSERT INTO authors VALUES (2, 'Bob')",
-            "INSERT INTO books VALUES (1, 'Book 1', 1)",
-            "INSERT INTO books VALUES (2, 'Book 2', 2)",
-        ];
+        // Create authors table
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)").unwrap().1)?;
 
-        for stmt in stmts {
-            let parsed_stmt = Statement::parse(stmt).unwrap().1;
-            db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx, parsed_stmt)?;
-        }
+        // Create books table
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER)").unwrap().1)?;
+
+        // Insert test data
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (1, 'Alice')").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (2, 'Bob')").unwrap().1)?;
+
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (1, 'Book 1', 1)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (2, 'Book 2', 2)").unwrap().1)?;
 
         // Commit setup
         db.transaction_manager.as_mut().unwrap().commit_transaction(setup_tx)?;
@@ -45,17 +57,23 @@ mod tests {
         // Begin a transaction for the join query
         let query_tx = db.transaction_manager.as_mut().unwrap().begin_transaction(IsolationLevel::Serializable)?;
 
-        // Test join
         let select_stmt = Statement::parse(
-            "SELECT authors.name, books.title 
-             FROM authors 
-             INNER JOIN books ON authors.id = books.author_id"
+            "SELECT authors.name, books.title FROM authors INNER JOIN books ON authors.id = books.author_id"
         ).unwrap().1;
 
         let result = db.transaction_manager.as_mut().unwrap().execute_statement(query_tx, select_stmt)?;
 
-        if let ReefDBResult::Select(rows) = result {
-            assert_eq!(rows.len(), 2, "Expected 2 rows from join");
+        if let ReefDBResult::Select(results) = result {
+            assert_eq!(results.len(), 2, "Expected 2 rows from join");
+            
+            // Verify column information
+            assert_eq!(results.columns.len(), 2);
+            assert_eq!(results.columns[0].name, "name");
+            assert_eq!(results.columns[0].data_type, DataType::Text);
+            assert_eq!(results.columns[0].table, Some("authors".to_string()));
+            assert_eq!(results.columns[1].name, "title");
+            assert_eq!(results.columns[1].data_type, DataType::Text);
+            assert_eq!(results.columns[1].table, Some("books".to_string()));
             
             // Verify all combinations exist
             let expected_combinations = vec![
@@ -64,7 +82,7 @@ mod tests {
             ];
 
             for (name, title) in expected_combinations {
-                assert!(rows.rows.iter().any(|(_, row)| {
+                assert!(results.rows.iter().any(|(_, row)| {
                     row[0] == name && row[1] == title
                 }), "Missing combination: {:?} - {:?}", name, title);
             }
@@ -83,26 +101,31 @@ mod tests {
 
         cleanup_test_files(kv_path, index_path);
 
-        let mut db = OnDiskReefDB::create_on_disk(kv_path.to_string(), index_path.to_string())?;
+        let mut db = InMemoryReefDB::create_in_memory()?;
 
         // Begin a transaction for setup
         let setup_tx = db.transaction_manager.as_mut().unwrap().begin_transaction(IsolationLevel::Serializable)?;
 
-        // Setup tables and data
-        let stmts = vec![
-            "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)",
-            "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, year INTEGER)",
-            "INSERT INTO authors VALUES (1, 'Alice')",
-            "INSERT INTO authors VALUES (2, 'Bob')",
-            "INSERT INTO books VALUES (1, 'Book 1', 1, 2020)",
-            "INSERT INTO books VALUES (2, 'Book 2', 2, 2021)",
-            "INSERT INTO books VALUES (3, 'Book 3', 1, 2022)",
-        ];
+        // Create authors table
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT)").unwrap().1)?;
 
-        for stmt in stmts {
-            let parsed_stmt = Statement::parse(stmt).unwrap().1;
-            db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx, parsed_stmt)?;
-        }
+        // Create books table with year column
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, year INTEGER)").unwrap().1)?;
+
+        // Insert test data
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (1, 'Alice')").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (2, 'Bob')").unwrap().1)?;
+
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (1, 'Book 1', 1, 2020)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (2, 'Book 2', 2, 2021)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (3, 'Book 3', 1, 2022)").unwrap().1)?;
 
         // Commit setup
         db.transaction_manager.as_mut().unwrap().commit_transaction(setup_tx)?;
@@ -119,8 +142,20 @@ mod tests {
 
         let result = db.transaction_manager.as_mut().unwrap().execute_statement(query_tx, select_stmt)?;
 
-        if let ReefDBResult::Select(rows) = result {
-            assert_eq!(rows.len(), 2, "Expected 2 rows matching year > 2020");
+        if let ReefDBResult::Select(results) = result {
+            assert_eq!(results.len(), 2, "Expected 2 rows matching year > 2020");
+            
+            // Verify column information
+            assert_eq!(results.columns.len(), 3);
+            assert_eq!(results.columns[0].name, "name");
+            assert_eq!(results.columns[0].data_type, DataType::Text);
+            assert_eq!(results.columns[0].table, Some("authors".to_string()));
+            assert_eq!(results.columns[1].name, "title");
+            assert_eq!(results.columns[1].data_type, DataType::Text);
+            assert_eq!(results.columns[1].table, Some("books".to_string()));
+            assert_eq!(results.columns[2].name, "year");
+            assert_eq!(results.columns[2].data_type, DataType::Integer);
+            assert_eq!(results.columns[2].table, Some("books".to_string()));
             
             // Verify specific combinations
             let expected_combinations = vec![
@@ -129,7 +164,7 @@ mod tests {
             ];
 
             for (name, title, year) in expected_combinations {
-                assert!(rows.rows.iter().any(|(_, row)| {
+                assert!(results.rows.iter().any(|(_, row)| {
                     row[0] == DataValue::Text(name.to_string()) &&
                     row[1] == DataValue::Text(title.to_string()) &&
                     row[2] == DataValue::Integer(year)
@@ -150,28 +185,36 @@ mod tests {
 
         cleanup_test_files(kv_path, index_path);
 
-        let mut db = OnDiskReefDB::create_on_disk(kv_path.to_string(), index_path.to_string())?;
+        let mut db = InMemoryReefDB::create_in_memory()?;
 
         // Begin a transaction for setup
         let setup_tx = db.transaction_manager.as_mut().unwrap().begin_transaction(IsolationLevel::Serializable)?;
 
-        // Setup tables and data
-        let stmts = vec![
-            "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, country TEXT)",
-            "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, genre TEXT)",
-            "INSERT INTO authors VALUES (1, 'Alice', 'USA')",
-            "INSERT INTO authors VALUES (2, 'Bob', 'UK')",
-            "INSERT INTO authors VALUES (3, 'Charlie', 'USA')",
-            "INSERT INTO books VALUES (1, 'Mystery 1', 1, 'Mystery')",
-            "INSERT INTO books VALUES (2, 'Romance 1', 2, 'Romance')",
-            "INSERT INTO books VALUES (3, 'Mystery 2', 3, 'Mystery')",
-            "INSERT INTO books VALUES (4, 'Mystery 3', 1, 'Mystery')",
-        ];
+        // Create authors table
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, country TEXT)").unwrap().1)?;
 
-        for stmt in stmts {
-            let parsed_stmt = Statement::parse(stmt).unwrap().1;
-            db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx, parsed_stmt)?;
-        }
+        // Create books table
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, genre TEXT)").unwrap().1)?;
+
+        // Insert test data for authors
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (1, 'Alice', 'USA')").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (2, 'Bob', 'UK')").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (3, 'Charlie', 'USA')").unwrap().1)?;
+
+        // Insert test data for books
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (1, 'Mystery 1', 1, 'Mystery')").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (2, 'Romance 1', 2, 'Romance')").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (3, 'Mystery 2', 3, 'Mystery')").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (4, 'Mystery 3', 1, 'Mystery')").unwrap().1)?;
 
         // Commit setup
         db.transaction_manager.as_mut().unwrap().commit_transaction(setup_tx)?;
@@ -188,8 +231,17 @@ mod tests {
 
         let result = db.transaction_manager.as_mut().unwrap().execute_statement(query_tx, select_stmt)?;
 
-        if let ReefDBResult::Select(rows) = result {
-            assert_eq!(rows.len(), 3, "Expected 3 mystery books by USA authors");
+        if let ReefDBResult::Select(results) = result {
+            assert_eq!(results.len(), 3, "Expected 3 mystery books by USA authors");
+            
+            // Verify column information
+            assert_eq!(results.columns.len(), 2);
+            assert_eq!(results.columns[0].name, "name");
+            assert_eq!(results.columns[0].data_type, DataType::Text);
+            assert_eq!(results.columns[0].table, Some("authors".to_string()));
+            assert_eq!(results.columns[1].name, "title");
+            assert_eq!(results.columns[1].data_type, DataType::Text);
+            assert_eq!(results.columns[1].table, Some("books".to_string()));
             
             // Verify specific combinations
             let expected_combinations = vec![
@@ -199,7 +251,7 @@ mod tests {
             ];
 
             for (name, title) in expected_combinations {
-                assert!(rows.rows.iter().any(|(_, row)| {
+                assert!(results.rows.iter().any(|(_, row)| {
                     row[0] == DataValue::Text(name.to_string()) &&
                     row[1] == DataValue::Text(title.to_string())
                 }), "Missing combination: {} - {}", name, title);
@@ -219,30 +271,40 @@ mod tests {
 
         cleanup_test_files(kv_path, index_path);
 
-        let mut db = OnDiskReefDB::create_on_disk(kv_path.to_string(), index_path.to_string())?;
+        let mut db = InMemoryReefDB::create_in_memory()?;
 
         // Begin a transaction for setup
         let setup_tx = db.transaction_manager.as_mut().unwrap().begin_transaction(IsolationLevel::Serializable)?;
 
-        // Setup tables and data
-        let stmts = vec![
-            "CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, country TEXT, age INTEGER)",
-            "CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, genre TEXT, year INTEGER)",
-            "INSERT INTO authors VALUES (1, 'Alice', 'USA', 30)",
-            "INSERT INTO authors VALUES (2, 'Bob', 'UK', 25)",
-            "INSERT INTO authors VALUES (3, 'Charlie', 'USA', 35)",
-            "INSERT INTO authors VALUES (4, 'David', 'USA', 40)",
-            "INSERT INTO books VALUES (1, 'Mystery 1', 1, 'Mystery', 2020)",
-            "INSERT INTO books VALUES (2, 'Romance 1', 2, 'Romance', 2021)",
-            "INSERT INTO books VALUES (3, 'Mystery 2', 3, 'Mystery', 2022)",
-            "INSERT INTO books VALUES (4, 'Mystery 3', 1, 'Mystery', 2023)",
-            "INSERT INTO books VALUES (5, 'Romance 2', 4, 'Romance', 2023)",
-        ];
+        // Create authors table
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT, country TEXT, age INTEGER)").unwrap().1)?;
 
-        for stmt in stmts {
-            let parsed_stmt = Statement::parse(stmt).unwrap().1;
-            db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx, parsed_stmt)?;
-        }
+        // Create books table
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT, author_id INTEGER, genre TEXT, year INTEGER)").unwrap().1)?;
+
+        // Insert test data for authors
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (1, 'Alice', 'USA', 30)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (2, 'Bob', 'UK', 25)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (3, 'Charlie', 'USA', 35)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO authors VALUES (4, 'David', 'USA', 40)").unwrap().1)?;
+
+        // Insert test data for books
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (1, 'Mystery 1', 1, 'Mystery', 2020)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (2, 'Romance 1', 2, 'Romance', 2021)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (3, 'Mystery 2', 3, 'Mystery', 2022)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (4, 'Mystery 3', 1, 'Mystery', 2023)").unwrap().1)?;
+        db.transaction_manager.as_mut().unwrap().execute_statement(setup_tx,
+            Statement::parse("INSERT INTO books VALUES (5, 'Romance 2', 4, 'Romance', 2023)").unwrap().1)?;
 
         // Commit setup
         db.transaction_manager.as_mut().unwrap().commit_transaction(setup_tx)?;
@@ -260,8 +322,17 @@ mod tests {
 
         let result = db.transaction_manager.as_mut().unwrap().execute_statement(query_tx, select_stmt)?;
 
-        if let ReefDBResult::Select(rows) = result {
-            assert_eq!(rows.len(), 2, "Expected 2 mystery books by USA authors after 2021");
+        if let ReefDBResult::Select(results) = result {
+            assert_eq!(results.len(), 2, "Expected 2 mystery books by USA authors after 2021");
+            
+            // Verify column information
+            assert_eq!(results.columns.len(), 2);
+            assert_eq!(results.columns[0].name, "name");
+            assert_eq!(results.columns[0].data_type, DataType::Text);
+            assert_eq!(results.columns[0].table, Some("authors".to_string()));
+            assert_eq!(results.columns[1].name, "title");
+            assert_eq!(results.columns[1].data_type, DataType::Text);
+            assert_eq!(results.columns[1].table, Some("books".to_string()));
             
             // Verify specific combinations
             let expected_combinations = vec![
@@ -270,7 +341,7 @@ mod tests {
             ];
 
             for (name, title) in expected_combinations {
-                assert!(rows.rows.iter().any(|(_, row)| {
+                assert!(results.rows.iter().any(|(_, row)| {
                     row[0] == DataValue::Text(name.to_string()) &&
                     row[1] == DataValue::Text(title.to_string())
                 }), "Missing combination: {} - {}", name, title);
@@ -289,8 +360,17 @@ mod tests {
 
         let result = db.transaction_manager.as_mut().unwrap().execute_statement(query_tx, select_stmt)?;
 
-        if let ReefDBResult::Select(rows) = result {
-            assert_eq!(rows.len(), 2, "Expected 2 rows matching complex OR condition");
+        if let ReefDBResult::Select(results) = result {
+            assert_eq!(results.len(), 2, "Expected 2 rows matching complex OR condition");
+            
+            // Verify column information
+            assert_eq!(results.columns.len(), 2);
+            assert_eq!(results.columns[0].name, "name");
+            assert_eq!(results.columns[0].data_type, DataType::Text);
+            assert_eq!(results.columns[0].table, Some("authors".to_string()));
+            assert_eq!(results.columns[1].name, "title");
+            assert_eq!(results.columns[1].data_type, DataType::Text);
+            assert_eq!(results.columns[1].table, Some("books".to_string()));
             
             // Verify specific combinations
             let expected_combinations = vec![
@@ -299,7 +379,7 @@ mod tests {
             ];
 
             for (name, title) in expected_combinations {
-                assert!(rows.rows.iter().any(|(_, row)| {
+                assert!(results.rows.iter().any(|(_, row)| {
                     row[0] == DataValue::Text(name.to_string()) &&
                     row[1] == DataValue::Text(title.to_string())
                 }), "Missing combination: {} - {}", name, title);

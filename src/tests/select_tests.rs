@@ -3,6 +3,7 @@ use crate::sql::{
     clauses::wheres::where_type::{WhereType, WhereClause},
     data_value::DataValue,
     operators::op::Op,
+    data_type::DataType,
 };
 
 type Result<T> = std::result::Result<T, ReefDBError>;
@@ -24,10 +25,19 @@ fn test_select_with_where() -> Result<()> {
         None
     ));
 
-    if let ReefDBResult::Select(rows) = db.query("SELECT * FROM users WHERE id = 1")? {
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0][0], DataValue::Integer(1));
-        assert_eq!(rows[0][1], DataValue::Text("Alice".to_string()));
+    if let ReefDBResult::Select(results) = db.query("SELECT * FROM users WHERE id = 1")? {
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0][0], DataValue::Integer(1));
+        assert_eq!(results[0][1], DataValue::Text("Alice".to_string()));
+
+        // Verify column information
+        assert_eq!(results.columns.len(), 2);
+        assert_eq!(results.columns[0].name, "id");
+        assert_eq!(results.columns[0].data_type, DataType::Integer);
+        assert_eq!(results.columns[0].table, Some("users".to_string()));
+        assert_eq!(results.columns[1].name, "name");
+        assert_eq!(results.columns[1].data_type, DataType::Text);
+        assert_eq!(results.columns[1].table, Some("users".to_string()));
     } else {
         panic!("Expected Select result");
     }
@@ -45,12 +55,21 @@ fn test_select_all() -> Result<()> {
     db.query("INSERT INTO users VALUES (2, 'Bob')")?;
 
     // Test SELECT *
-    if let ReefDBResult::Select(rows) = db.query("SELECT * FROM users")? {
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0][0], DataValue::Integer(1));
-        assert_eq!(rows[0][1], DataValue::Text("Alice".to_string()));
-        assert_eq!(rows[1][0], DataValue::Integer(2));
-        assert_eq!(rows[1][1], DataValue::Text("Bob".to_string()));
+    if let ReefDBResult::Select(results) = db.query("SELECT * FROM users")? {
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0][0], DataValue::Integer(1));
+        assert_eq!(results[0][1], DataValue::Text("Alice".to_string()));
+        assert_eq!(results[1][0], DataValue::Integer(2));
+        assert_eq!(results[1][1], DataValue::Text("Bob".to_string()));
+
+        // Verify column information
+        assert_eq!(results.columns.len(), 2);
+        assert_eq!(results.columns[0].name, "id");
+        assert_eq!(results.columns[0].data_type, DataType::Integer);
+        assert_eq!(results.columns[0].table, Some("users".to_string()));
+        assert_eq!(results.columns[1].name, "name");
+        assert_eq!(results.columns[1].data_type, DataType::Text);
+        assert_eq!(results.columns[1].table, Some("users".to_string()));
     } else {
         panic!("Expected Select result");
     }
