@@ -1,11 +1,18 @@
 use functions::{register_builtins, FunctionRegistry};
-use result::QueryResult;
+use result::{QueryResult, ColumnInfo};
 use sql::column::ColumnType;
+use sql::data_type::DataType;
 
-use crate::sql::table_reference::TableReference;
-use crate::sql::data_type::DataType;
-use crate::result::ColumnInfo;
 use crate::sql::{
+    clauses::{
+        join_clause::JoinClause,
+        wheres::where_type::WhereType,
+        order_by::{OrderByClause, OrderDirection},
+    },
+    column_def::ColumnDef,
+    data_value::DataValue,
+    table_reference::TableReference,
+    column::Column,
     statements::{
         Statement,
         create::CreateStatement,
@@ -18,13 +25,6 @@ use crate::sql::{
         create_index::CreateIndexStatement,
         drop_index::DropIndexStatement,
     },
-    column_def::ColumnDef,
-    clauses::{
-        wheres::where_type::WhereType,
-        join_clause::JoinClause,
-    },
-    data_value::DataValue,
-    column::Column,
 };
 use crate::result::ReefDBResult;
 use crate::error::ReefDBError;
@@ -237,6 +237,7 @@ where
         columns: Vec<Column>,
         where_clause: Option<WhereType>,
         joins: Vec<JoinClause>,
+        order_by: Vec<OrderByClause>,
     ) -> Result<ReefDBResult, ReefDBError> {
         self.verify_table_exists(&table_ref.name)?;
         let (schema, data) = self.get_table_schema(&table_ref.name)?;
@@ -252,11 +253,31 @@ where
             }
         }
 
-        // Process rows
-        if joins.is_empty() {
-            self.handle_simple_select(&table_ref.name, schema, data, &columns, where_clause, &mut result)?;
-        } else {
+        // Handle joins if present
+        if !joins.is_empty() {
             self.handle_join_select(&table_ref.name, schema, data, &columns, where_clause, &joins, &mut result)?;
+        } else {
+            self.handle_simple_select(&table_ref.name, schema, data, &columns, where_clause, &mut result)?;
+        }
+
+        // Apply ordering if present
+        if !order_by.is_empty() {
+            result.sort_by(|(_, row1), (_, row2)| {
+                for order_clause in &order_by {
+                    let col_name = &order_clause.column.name;
+                    let col_idx = schema.iter().position(|col| col.name == *col_name)
+                        .expect("Column not found in schema");
+                    
+                    let cmp = row1[col_idx].partial_cmp(&row2[col_idx])
+                        .unwrap_or(std::cmp::Ordering::Equal);
+                    
+                    match order_clause.direction {
+                        OrderDirection::Asc => if cmp != std::cmp::Ordering::Equal { return cmp; },
+                        OrderDirection::Desc => if cmp != std::cmp::Ordering::Equal { return cmp.reverse(); },
+                    }
+                }
+                std::cmp::Ordering::Equal
+            });
         }
 
         // Create column info
@@ -766,11 +787,11 @@ where
             Statement::Create(CreateStatement::Table(name, columns)) => {
                 self.handle_create(name, columns)
             },
-            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, joins)) => {
-                self.handle_select(table_name, columns, where_clause, joins)
-            },
             Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
                 self.handle_insert(table_name, values)
+            },
+            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, joins, order_by)) => {
+                self.handle_select(table_name, columns, where_clause, joins, order_by)
             },
             Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
                 self.handle_update(table_name, updates, where_clause)
@@ -790,8 +811,8 @@ where
             Statement::DropIndex(stmt) => {
                 self.handle_drop_index(stmt)
             },
-            Statement::Savepoint(sp_stmt) => {
-                self.handle_savepoint(sp_stmt.name)
+            Statement::Savepoint(stmt) => {
+                self.handle_savepoint(stmt.name)
             },
             Statement::RollbackToSavepoint(name) => {
                 self.handle_rollback_to_savepoint(name)

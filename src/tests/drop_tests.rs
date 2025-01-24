@@ -43,6 +43,7 @@ fn test_drop_table() {
         vec![Column { name: "*".to_string(), table: None, column_type: ColumnType::Wildcard }],
         None,
         vec![],
+        vec![],
     ));
     assert!(db.execute_statement(stmt).is_err());
 }

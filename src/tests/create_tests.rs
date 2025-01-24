@@ -41,6 +41,7 @@ fn test_create_statement() -> Result<(), ReefDBError> {
         vec![Column { name: "*".to_string(), table: None, column_type: ColumnType::Wildcard }],
         None,
         vec![],
+        vec![],
     );
     let result = db.transaction_manager.as_mut().unwrap().execute_statement(transaction_id, Statement::Select(select_stmt));
     assert!(result.is_ok()); // Table should exist and be queryable
@@ -135,6 +136,7 @@ fn test_create_statement() -> Result<(), ReefDBError> {
         },
         vec![Column { name: "*".to_string(), table: None, column_type: ColumnType::Wildcard }],
         Some(where_clause),
+        vec![],
         vec![],
     );
     let result = db.transaction_manager.as_mut().unwrap().execute_statement(transaction_id, Statement::Select(select_stmt))?;

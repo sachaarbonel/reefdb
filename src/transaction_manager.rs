@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::cmp::Ordering;
 use crate::fts::search::Search;
 
 use crate::result::{ColumnInfo, QueryResult};
@@ -21,11 +22,15 @@ use crate::{
         clauses::{
             join_clause::JoinClause,
             wheres::where_type::WhereType,
+            order_by::{OrderByClause, OrderDirection},
         },
         column::Column,
         column_def::ColumnDef,
         column_value_pair::ColumnValuePair,
         data_value::DataValue,
+        table_reference::TableReference,
+        data_type::DataType,
+        constraints::constraint::Constraint,
         statements::{
             alter::AlterStatement,
             create::CreateStatement,
@@ -423,9 +428,150 @@ where
         }
     }
 
+    fn sort_results(
+        &self,
+        mut results: Vec<(usize, Vec<DataValue>)>,
+        order_by: &[OrderByClause],
+        schema: &[ColumnDef],
+        table_name: &str,
+        joined_tables: &[(JoinClause, (Vec<ColumnDef>, Vec<Vec<DataValue>>))],
+    ) -> Vec<(usize, Vec<DataValue>)> {
+        if order_by.is_empty() || results.is_empty() {
+            return results;
+        }
+
+        results.sort_by(|a, b| {
+            for order_clause in order_by {
+                let col_name = &order_clause.column.name;
+                
+                // Find the column index in the result values
+                let col_idx = match &order_clause.column.table {
+                    Some(table) => {
+                        // For columns with explicit table references
+                        if table == table_name {
+                            // Column is from the main table
+                            schema.iter().position(|c| c.name == *col_name)
+                        } else {
+                            // Column is from a joined table
+                            joined_tables.iter()
+                                .find(|(join, _)| join.table_ref.name == *table)
+                                .and_then(|(_, (schema, _))| schema.iter().position(|c| c.name == *col_name))
+                                .map(|pos| pos + schema.len())
+                        }
+                    },
+                    None => {
+                        // For columns without table references, find the first matching column
+                        schema.iter().position(|c| c.name == *col_name).or_else(|| {
+                            joined_tables.iter()
+                                .find_map(|(_, (schema, _))| {
+                                    schema.iter().position(|c| c.name == *col_name)
+                                        .map(|pos| pos + schema.len())
+                                })
+                        })
+                    }
+                };
+
+                if let Some(idx) = col_idx {
+                    if idx < a.1.len() && idx < b.1.len() {
+                        let cmp = a.1[idx].cmp(&b.1[idx]);
+                        if cmp != Ordering::Equal {
+                            return match order_clause.direction {
+                                OrderDirection::Desc => cmp.reverse(),
+                                OrderDirection::Asc => cmp,
+                            };
+                        }
+                    }
+                }
+            }
+            Ordering::Equal
+        });
+
+        results
+    }
+
     pub fn execute_statement(&mut self, transaction_id: u64, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
         match stmt {
-            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins)) => {
+            Statement::Create(create_stmt) => {
+                let transaction = self.get_transaction(transaction_id)?;
+                transaction.execute_statement(Statement::Create(create_stmt))
+            }
+            Statement::Insert(insert_stmt) => {
+                let transaction = self.get_transaction(transaction_id)?;
+                transaction.execute_statement(Statement::Insert(insert_stmt))
+            }
+            Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
+                // First get the transaction guard
+                let mut guard = self.get_transaction_guard(transaction_id)?;
+                
+                // Handle serializable mode if needed
+                if guard.isolation_level == IsolationLevel::Serializable {
+                    let snapshot = guard.transaction.acid_manager.get_committed_snapshot();
+                    let mut final_state = snapshot.clone();
+                    final_state.restore_from(&guard.transaction.reef_db.tables);
+                    guard.transaction.reef_db.tables.restore_from(&final_state);
+                }
+
+                // Get table data
+                let table_data = guard.transaction.reef_db.storage.get_table_ref(&table_name)
+                    .ok_or_else(|| ReefDBError::TableNotFound(table_name.clone()))?;
+                let (schema, rows) = table_data.clone(); // Clone to avoid lifetime issues
+                
+                // Drop the guard before getting the MVCC manager
+                drop(guard);
+
+                // Now get the MVCC manager
+                let mut mvcc_manager = self.mvcc_manager.lock()
+                    .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?;
+                
+                let mut updated_count = 0;
+
+                // Process each row
+                for row in rows {
+                    // Get the ID from the first column (primary key)
+                    let id = match &row[0] {
+                        DataValue::Integer(n) => n.to_string(),
+                        _ => continue,
+                    };
+                    let key = KeyFormat::row(&table_name, 0, &id);
+                    
+                    // Check where clause
+                    let should_update = if let Some(ref where_clause) = where_clause {
+                        Self::evaluate_where_clause(
+                            where_clause,
+                            &row,
+                            &schema,
+                            &table_name,
+                        )
+                    } else {
+                        true
+                    };
+
+                    if should_update {
+                        // Create a new version with the updated values
+                        let mut new_data = row.clone();
+                        for (col_name, new_value) in &updates {
+                            if let Some(col_idx) = schema.iter().position(|c| c.name == *col_name) {
+                                new_data[col_idx] = new_value.clone();
+                            }
+                        }
+                        
+                        // Write the new version using MVCC
+                        mvcc_manager.write(transaction_id, key, new_data)?;
+                        updated_count += 1;
+                    }
+                }
+
+                Ok(ReefDBResult::Update(updated_count))
+            }
+            Statement::Delete(delete_stmt) => {
+                let transaction = self.get_transaction(transaction_id)?;
+                transaction.execute_statement(Statement::Delete(delete_stmt))
+            }
+            Statement::Drop(drop_stmt) => {
+                let transaction = self.get_transaction(transaction_id)?;
+                transaction.execute_statement(Statement::Drop(drop_stmt))
+            }
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins, order_by)) => {
                 // First get the transaction guard and storage data
                 let guard = self.get_transaction_guard(transaction_id)?;
 
@@ -449,7 +595,7 @@ where
                     let joined_table = guard.transaction.reef_db.storage.get_table_ref(&join.table_ref.name)
                         .ok_or_else(|| ReefDBError::TableNotFound(join.table_ref.name.clone()))?;
                     joined_schemas.push((join.table_ref.name.as_str(), joined_table.0.as_slice()));
-                    joined_tables.push((join, (joined_table.0.to_vec(), joined_table.1.to_vec())));
+                    joined_tables.push((join.clone(), (joined_table.0.to_vec(), joined_table.1.to_vec())));
                 }
 
                 // Create column info for all tables
@@ -459,10 +605,7 @@ where
                     ColumnInfo::from_joined_schemas(&schema, &table_ref.name, &joined_schemas, &columns)?
                 };
 
-                // Drop the guard before getting the MVCC manager
-                drop(guard);
-
-                // Now get the MVCC manager
+                // Get the MVCC manager
                 let mut mvcc_manager = self.mvcc_manager.lock()
                     .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?;
                 
@@ -544,36 +687,38 @@ where
                                                         (start, len)
                                                     };
                                                     
-                                                    if schema_start + schema_len <= combined_schema.len() {
-                                                        combined_schema[schema_start..schema_start + schema_len]
+                                                    // Add safety check for schema boundaries
+                                                    if schema_start >= combined_schema.len() {
+                                                        None
+                                                    } else {
+                                                        let end = std::cmp::min(schema_start + schema_len, combined_schema.len());
+                                                        combined_schema[schema_start..end]
                                                             .iter()
                                                             .position(|c| c.name == clause.col_name)
                                                             .map(|pos| schema_start + pos)
-                                                    } else {
-                                                        None
                                                     }
                                                 } else {
                                                     // If no table specified, look in all columns
                                                     combined_schema.iter().position(|c| c.name == clause.col_name)
                                                 };
-                                                
+
                                                 if let Some(idx) = col_idx {
                                                     result = clause.operator.evaluate(&combined_row[idx], &clause.value);
                                                 } else {
                                                     result = false;
                                                 }
-                                            },
+                                            }
                                             WhereType::And(left, right) => {
                                                 result = Self::evaluate_where_clause(left, &combined_row, &combined_schema, &table_ref.name) &&
                                                         Self::evaluate_where_clause(right, &combined_row, &combined_schema, &table_ref.name);
-                                            },
+                                            }
                                             WhereType::Or(left, right) => {
                                                 result = Self::evaluate_where_clause(left, &combined_row, &combined_schema, &table_ref.name) ||
                                                         Self::evaluate_where_clause(right, &combined_row, &combined_schema, &table_ref.name);
-                                            },
+                                            }
                                             WhereType::FTS(_) => {
                                                 result = false;
-                                            },
+                                            }
                                         }
                                         result
                                     } else {
@@ -590,130 +735,118 @@ where
                     }
 
                     // Process each matched row
-                    for (joined_data, joined_schema) in matched_rows {
-                        // Project only the requested columns
-                        let mut projected = Vec::new();
-                        if columns.iter().any(|c| c.name == "*") {
-                            projected = joined_data;
-                        } else {
-                            for col in &columns {
-                                let col_value = if let Some(table) = &col.table {
-                                    // Find column in specific table's schema
-                                    let (schema_start, schema_len) = if table == &table_ref.name {
-                                        (0, schema.len())
+                    for (joined_data, _) in matched_rows {
+                        results.push((i, joined_data));
+                    }
+                }
+
+                // Sort results if order by clauses are present
+                results = self.sort_results(results, &order_by, &schema, &table_ref.name, &joined_tables);
+
+                // Project columns after sorting
+                let mut projected_results = Vec::new();
+                for (i, joined_data) in results {
+                    let mut projected = Vec::new();
+                    if columns.iter().any(|c| c.name == "*") {
+                        projected = joined_data;
+                    } else {
+                        for col in &columns {
+                            let col_value = if let Some(table) = &col.table {
+                                // Find column in specific table's schema
+                                let (schema_start, schema_len) = if table == &table_ref.name {
+                                    (0, schema.len())
+                                } else {
+                                    let mut start = schema.len();
+                                    let mut found = false;
+                                    let mut len = 0;
+                                    for (join, (join_schema, _)) in &joined_tables {
+                                        if &join.table_ref.name == table {
+                                            len = join_schema.len();
+                                            found = true;
+                                            break;
+                                        }
+                                        start += join_schema.len();
+                                    }
+                                    if !found {
+                                        (0, 0) // Table not found
                                     } else {
-                                        let mut start = schema.len();
-                                        let mut len = 0;
+                                        (start, len)
+                                    }
+                                };
+                                
+                                // Ensure we don't exceed the data boundaries
+                                if schema_start < joined_data.len() {
+                                    let end = std::cmp::min(schema_start + schema_len, joined_data.len());
+                                    let schema_slice = if schema_start < schema.len() {
+                                        &schema[schema_start..std::cmp::min(schema_start + schema_len, schema.len())]
+                                    } else {
                                         for (join, (join_schema, _)) in &joined_tables {
                                             if &join.table_ref.name == table {
-                                                len = join_schema.len();
-                                                break;
+                                                if let Some(idx) = join_schema.iter().position(|c| c.name == col.name) {
+                                                    if schema_start + idx < joined_data.len() {
+                                                        projected.push(joined_data[schema_start + idx].clone());
+                                                    }
+                                                    break;
+                                                }
                                             }
-                                            start += join_schema.len();
                                         }
-                                        (start, len)
+                                        &[]
                                     };
                                     
-                                    if schema_start + schema_len <= joined_schema.len() {
-                                        if let Some(idx) = joined_schema[schema_start..schema_start + schema_len]
-                                            .iter()
-                                            .position(|c| c.name == col.name)
-                                        {
-                                            Some(joined_data[schema_start + idx].clone())
-                                        } else {
-                                            None
-                                        }
+                                    if let Some(idx) = schema_slice.iter().position(|c| c.name == col.name) {
+                                        Some(joined_data[schema_start + idx].clone())
                                     } else {
                                         None
                                     }
                                 } else {
-                                    // Try to find column in any table
-                                    if let Some(idx) = joined_schema.iter().position(|c| c.name == col.name) {
-                                        Some(joined_data[idx].clone())
-                                    } else {
-                                        None
-                                    }
-                                };
-                                
-                                if let Some(value) = col_value {
-                                    projected.push(value);
+                                    None
                                 }
+                            } else {
+                                // Try to find column in any table
+                                if let Some(idx) = schema.iter().position(|c| c.name == col.name) {
+                                    Some(joined_data[idx].clone())
+                                } else {
+                                    // Try joined tables
+                                    let mut start = schema.len();
+                                    for (_, (join_schema, _)) in &joined_tables {
+                                        if let Some(idx) = join_schema.iter().position(|c| c.name == col.name) {
+                                            if start + idx < joined_data.len() {
+                                                projected.push(joined_data[start + idx].clone());
+                                                break;
+                                            }
+                                        }
+                                        start += join_schema.len();
+                                    }
+                                    None
+                                }
+                            };
+                            
+                            if let Some(value) = col_value {
+                                projected.push(value);
                             }
                         }
-                        results.push((i, projected));
                     }
+                    projected_results.push((i, projected));
                 }
 
-                Ok(ReefDBResult::Select(QueryResult::with_columns(results, column_info)))
-            },
-            Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
-                // First get the transaction guard
-                let mut guard = self.get_transaction_guard(transaction_id)?;
-                
-                // Handle serializable mode if needed
-                if guard.isolation_level == IsolationLevel::Serializable {
-                    let snapshot = guard.transaction.acid_manager.get_committed_snapshot();
-                    let mut final_state = snapshot.clone();
-                    final_state.restore_from(&guard.transaction.reef_db.tables);
-                    guard.transaction.reef_db.tables.restore_from(&final_state);
-                }
-
-                // Get table data
-                let table_data = guard.transaction.reef_db.storage.get_table_ref(&table_name)
-                    .ok_or_else(|| ReefDBError::TableNotFound(table_name.clone()))?;
-                let (schema, rows) = table_data.clone(); // Clone to avoid lifetime issues
-                
-                // Drop the guard before getting the MVCC manager
-                drop(guard);
-
-                // Now get the MVCC manager
-                let mut mvcc_manager = self.mvcc_manager.lock()
-                    .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?;
-                
-                let mut updated_count = 0;
-
-                // Process each row
-                for row in rows {
-                    // Get the ID from the first column (primary key)
-                    let id = match &row[0] {
-                        DataValue::Integer(n) => n.to_string(),
-                        _ => continue,
-                    };
-                    let key = KeyFormat::row(&table_name, 0, &id);
-                    
-                    // Check where clause
-                    let should_update = if let Some(ref where_clause) = where_clause {
-                        Self::evaluate_where_clause(
-                            where_clause,
-                            &row,
-                            &schema,
-                            &table_name,
-                        )
-                    } else {
-                        true
-                    };
-
-                    if should_update {
-                        // Create a new version with the updated values
-                        let mut new_data = row.clone();
-                        for (col_name, new_value) in &updates {
-                            if let Some(col_idx) = schema.iter().position(|c| c.name == *col_name) {
-                                new_data[col_idx] = new_value.clone();
-                            }
-                        }
-                        
-                        // Write the new version using MVCC
-                        mvcc_manager.write(transaction_id, key, new_data)?;
-                        updated_count += 1;
-                    }
-                }
-
-                Ok(ReefDBResult::Update(updated_count))
-            },
+                Ok(ReefDBResult::Select(QueryResult::with_columns(projected_results, column_info)))
+            }
+            Statement::CreateIndex(create_index_stmt) => {
+                let transaction = self.get_transaction(transaction_id)?;
+                transaction.execute_statement(Statement::CreateIndex(create_index_stmt))
+            }
+            Statement::DropIndex(drop_index_stmt) => {
+                let transaction = self.get_transaction(transaction_id)?;
+                transaction.execute_statement(Statement::DropIndex(drop_index_stmt))
+            }
+            Statement::Alter(alter_stmt) => {
+                let transaction = self.get_transaction(transaction_id)?;
+                transaction.execute_statement(Statement::Alter(alter_stmt))
+            }
             _ => {
                 let transaction = self.get_transaction(transaction_id)?;
                 transaction.execute_statement(stmt)
-            },
+            }
         }
     }
 
@@ -722,7 +855,7 @@ where
             .map_err(|_| ReefDBError::Other("Failed to acquire database lock".to_string()))?;
 
         match stmt {
-            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, _joins)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, _joins, order_by)) => {
                 let mvcc_manager = self.mvcc_manager.lock()
                     .map_err(|_| ReefDBError::Other("Failed to acquire MVCC manager lock".to_string()))?;
 
@@ -789,6 +922,9 @@ where
                     }
                 }
 
+                // Sort results if order by clauses are present
+                results = self.sort_results(results, &order_by, schema, &table_ref.name, &[]);
+
                 println!("MVCC Debug - Final results count: {}", results.len());
                 let column_infos = ColumnInfo::from_schema_and_columns(&schema, &columns, &table_ref.name)?;
                 Ok(ReefDBResult::Select(QueryResult::with_columns(results, column_infos)))
@@ -846,7 +982,7 @@ where
             Statement::Create(CreateStatement::Table(table_name, _)) => {
                 self.acquire_lock(transaction_id, table_name, LockType::Exclusive)?;
             }
-            Statement::Select(SelectStatement::FromTable(table_ref, _, _, _)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, _, _, _,_)) => {
                 // For serializable isolation, we need shared locks to prevent phantom reads
                 // But with MVCC, we don't need to acquire locks for reads since each transaction
                 // sees its own snapshot of the data
@@ -871,7 +1007,7 @@ where
             
             // For SELECT statements, we want to see the snapshot from when the transaction started
             match &stmt {
-                Statement::Select(SelectStatement::FromTable(_, _, _, _)) => {
+                Statement::Select(SelectStatement::FromTable(_, _, _, _,_)) => {
                     transaction.reef_db.tables.restore_from(&snapshot);
                 }
                 _ => {
@@ -944,6 +1080,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use crate::InMemoryReefDB;
+    use crate::sql::data_type::DataType;
 
     #[test]
     fn test_transaction_manager() {
@@ -970,4 +1107,423 @@ mod tests {
         // Now second transaction should be able to acquire lock
         assert!(tm.acquire_lock(tx_id2, "users", LockType::Shared).is_ok());
     }
-} 
+
+    #[test]
+    fn test_order_by() {
+        let dir = tempdir().unwrap();
+        let wal_path = dir.path().join("test.wal");
+        let wal = WriteAheadLog::new(wal_path).unwrap();
+        
+        let db = InMemoryReefDB::create_in_memory().unwrap();
+        let mut tm = TransactionManager::create(db, wal);
+        
+        // Begin transaction
+        let tx_id = tm.begin_transaction(IsolationLevel::Serializable).unwrap();
+        
+        // Create users table
+        let create_stmt = Statement::Create(CreateStatement::Table(
+            "users".to_string(),
+            vec![
+                ColumnDef {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                    constraints: vec![Constraint::PrimaryKey, Constraint::NotNull, Constraint::Unique],
+                },
+                ColumnDef {
+                    name: "name".to_string(),
+                    data_type: DataType::Text,
+                    constraints: vec![Constraint::NotNull],
+                },
+                ColumnDef {
+                    name: "age".to_string(),
+                    data_type: DataType::Integer,
+                    constraints: vec![Constraint::NotNull],
+                },
+            ],
+        ));
+        tm.execute_statement(tx_id, create_stmt).unwrap();
+
+        // Insert test data
+        let insert_stmt1 = Statement::Insert(InsertStatement::IntoTable(
+            "users".to_string(),
+            vec![
+                DataValue::Integer(1),
+                DataValue::Text("Alice".to_string()),
+                DataValue::Integer(25),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_stmt1).unwrap();
+
+        let insert_stmt2 = Statement::Insert(InsertStatement::IntoTable(
+            "users".to_string(),
+            vec![
+                DataValue::Integer(2),
+                DataValue::Text("Bob".to_string()),
+                DataValue::Integer(30),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_stmt2).unwrap();
+
+        let insert_stmt3 = Statement::Insert(InsertStatement::IntoTable(
+            "users".to_string(),
+            vec![
+                DataValue::Integer(3),
+                DataValue::Text("Charlie".to_string()),
+                DataValue::Integer(20),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_stmt3).unwrap();
+
+        // Test ORDER BY age DESC
+        let select_stmt = Statement::Select(SelectStatement::FromTable(
+            TableReference {
+                name: "users".to_string(),
+                alias: None,
+            },
+            vec![
+                Column {
+                    table: None,
+                    name: "name".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("name".to_string()),
+                },
+                Column {
+                    table: None,
+                    name: "age".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("age".to_string()),
+                },
+            ],
+            None,
+            vec![],
+            vec![OrderByClause {
+                column: Column {
+                    table: None,
+                    name: "age".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("age".to_string()),
+                },
+                direction: OrderDirection::Desc,
+            }],
+        ));
+
+        let result = tm.execute_statement(tx_id, select_stmt).unwrap();
+        
+        if let ReefDBResult::Select(query_result) = result {
+            let rows = query_result.rows;
+            assert_eq!(rows.len(), 3);
+            // Check order: Bob (30), Alice (25), Charlie (20)
+            assert_eq!(rows[0].1[0], DataValue::Text("Bob".to_string()));
+            assert_eq!(rows[0].1[1], DataValue::Integer(30));
+            assert_eq!(rows[1].1[0], DataValue::Text("Alice".to_string()));
+            assert_eq!(rows[1].1[1], DataValue::Integer(25));
+            assert_eq!(rows[2].1[0], DataValue::Text("Charlie".to_string()));
+            assert_eq!(rows[2].1[1], DataValue::Integer(20));
+        } else {
+            panic!("Expected Select result");
+        }
+
+        // Test multiple ORDER BY: age ASC, name DESC
+        let select_stmt = Statement::Select(SelectStatement::FromTable(
+            TableReference {
+                name: "users".to_string(),
+                alias: None,
+            },
+            vec![
+                Column {
+                    table: None,
+                    name: "name".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("name".to_string()),
+                },
+                Column {
+                    table: None,
+                    name: "age".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("age".to_string()),
+                },
+            ],
+            None,
+            vec![],
+            vec![
+                OrderByClause {
+                    column: Column {
+                        table: None,
+                        name: "age".to_string(),
+                        column_type: crate::sql::column::ColumnType::Regular("age".to_string()),
+                    },
+                    direction: OrderDirection::Asc,
+                },
+                OrderByClause {
+                    column: Column {
+                        table: None,
+                        name: "name".to_string(),
+                        column_type: crate::sql::column::ColumnType::Regular("name".to_string()),
+                    },
+                    direction: OrderDirection::Desc,
+                },
+            ],
+        ));
+
+        let result = tm.execute_statement(tx_id, select_stmt).unwrap();
+        
+        if let ReefDBResult::Select(query_result) = result {
+            let rows = query_result.rows;
+            assert_eq!(rows.len(), 3);
+            // Check order: Charlie (20), Alice (25), Bob (30)
+            assert_eq!(rows[0].1[0], DataValue::Text("Charlie".to_string()));
+            assert_eq!(rows[0].1[1], DataValue::Integer(20));
+            assert_eq!(rows[1].1[0], DataValue::Text("Alice".to_string()));
+            assert_eq!(rows[1].1[1], DataValue::Integer(25));
+            assert_eq!(rows[2].1[0], DataValue::Text("Bob".to_string()));
+            assert_eq!(rows[2].1[1], DataValue::Integer(30));
+        } else {
+            panic!("Expected Select result");
+        }
+
+        tm.commit_transaction(tx_id).unwrap();
+    }
+
+    #[test]
+    fn test_integration() {
+        let dir = tempdir().unwrap();
+        let wal_path = dir.path().join("test.wal");
+        let wal = WriteAheadLog::new(wal_path).unwrap();
+        
+        let db = InMemoryReefDB::create_in_memory().unwrap();
+        let mut tm = TransactionManager::create(db, wal);
+        
+        // Begin transaction
+        let tx_id = tm.begin_transaction(IsolationLevel::Serializable).unwrap();
+        
+        // Create users table
+        let create_stmt = Statement::Create(CreateStatement::Table(
+            "users".to_string(),
+            vec![
+                ColumnDef {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                    constraints: vec![Constraint::PrimaryKey, Constraint::NotNull, Constraint::Unique],
+                },
+                ColumnDef {
+                    name: "name".to_string(),
+                    data_type: DataType::Text,
+                    constraints: vec![Constraint::NotNull],
+                },
+                ColumnDef {
+                    name: "age".to_string(),
+                    data_type: DataType::Integer,
+                    constraints: vec![Constraint::NotNull],
+                },
+            ],
+        ));
+        tm.execute_statement(tx_id, create_stmt).unwrap();
+
+        // Insert test data
+        let insert_stmt1 = Statement::Insert(InsertStatement::IntoTable(
+            "users".to_string(),
+            vec![
+                DataValue::Integer(1),
+                DataValue::Text("Alice".to_string()),
+                DataValue::Integer(25),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_stmt1).unwrap();
+
+        let insert_stmt2 = Statement::Insert(InsertStatement::IntoTable(
+            "users".to_string(),
+            vec![
+                DataValue::Integer(2),
+                DataValue::Text("Bob".to_string()),
+                DataValue::Integer(30),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_stmt2).unwrap();
+
+        let insert_stmt3 = Statement::Insert(InsertStatement::IntoTable(
+            "users".to_string(),
+            vec![
+                DataValue::Integer(3),
+                DataValue::Text("Charlie".to_string()),
+                DataValue::Integer(20),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_stmt3).unwrap();
+
+        // Create orders table
+        let create_orders_stmt = Statement::Create(CreateStatement::Table(
+            "orders".to_string(),
+            vec![
+                ColumnDef {
+                    name: "id".to_string(),
+                    data_type: DataType::Integer,
+                    constraints: vec![Constraint::PrimaryKey, Constraint::NotNull, Constraint::Unique],
+                },
+                ColumnDef {
+                    name: "user_id".to_string(),
+                    data_type: DataType::Integer,
+                    constraints: vec![Constraint::NotNull],
+                },
+                ColumnDef {
+                    name: "amount".to_string(),
+                    data_type: DataType::Integer,
+                    constraints: vec![Constraint::NotNull],
+                },
+            ],
+        ));
+        tm.execute_statement(tx_id, create_orders_stmt).unwrap();
+
+        // Insert test data into orders
+        let insert_order1 = Statement::Insert(InsertStatement::IntoTable(
+            "orders".to_string(),
+            vec![
+                DataValue::Integer(1),
+                DataValue::Integer(1), // Alice
+                DataValue::Integer(25),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_order1).unwrap();
+
+        let insert_order2 = Statement::Insert(InsertStatement::IntoTable(
+            "orders".to_string(),
+            vec![
+                DataValue::Integer(2),
+                DataValue::Integer(2), // Bob
+                DataValue::Integer(30),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_order2).unwrap();
+
+        let insert_order3 = Statement::Insert(InsertStatement::IntoTable(
+            "orders".to_string(),
+            vec![
+                DataValue::Integer(3),
+                DataValue::Integer(3), // Charlie
+                DataValue::Integer(20),
+            ],
+        ));
+        tm.execute_statement(tx_id, insert_order3).unwrap();
+
+        // Test 1: Simple select, order by age DESC
+        let select_stmt = Statement::Select(SelectStatement::FromTable(
+            TableReference {
+                name: "users".to_string(),
+                alias: None,
+            },
+            vec![
+                Column {
+                    table: None,
+                    name: "name".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("name".to_string()),
+                },
+                Column {
+                    table: None,
+                    name: "age".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("age".to_string()),
+                },
+            ],
+            None,
+            vec![],
+            vec![OrderByClause {
+                column: Column {
+                    table: None,
+                    name: "age".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("age".to_string()),
+                },
+                direction: OrderDirection::Desc,
+            }],
+        ));
+
+        let result = tm.execute_statement(tx_id, select_stmt).unwrap();
+        
+        if let ReefDBResult::Select(query_result) = result {
+            let rows = query_result.rows;
+            assert_eq!(rows.len(), 3);
+            // Check order: Bob (30), Alice (25), Charlie (20)
+            assert_eq!(rows[0].1[0], DataValue::Text("Bob".to_string()));
+            assert_eq!(rows[0].1[1], DataValue::Integer(30));
+            assert_eq!(rows[1].1[0], DataValue::Text("Alice".to_string()));
+            assert_eq!(rows[1].1[1], DataValue::Integer(25));
+            assert_eq!(rows[2].1[0], DataValue::Text("Charlie".to_string()));
+            assert_eq!(rows[2].1[1], DataValue::Integer(20));
+        } else {
+            panic!("Expected Select result");
+        }
+
+        // Test 2: Join users and orders, order by amount DESC, name ASC
+        let join_clause = JoinClause {
+            table_ref: TableReference {
+                name: "orders".to_string(),
+                alias: None,
+            },
+            on: (
+                ColumnValuePair {
+                    table_name: "users".to_string(),
+                    column_name: "id".to_string(),
+                },
+                ColumnValuePair {
+                    table_name: "orders".to_string(),
+                    column_name: "user_id".to_string(),
+                },
+            ),
+            join_type: crate::sql::clauses::join_clause::JoinType::Inner,
+        };
+
+        let select_stmt = Statement::Select(SelectStatement::FromTable(
+            TableReference {
+                name: "users".to_string(),
+                alias: None,
+            },
+            vec![
+                Column {
+                    table: None,
+                    name: "name".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("name".to_string()),
+                },
+                Column {
+                    table: None,
+                    name: "age".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("age".to_string()),
+                },
+                Column {
+                    table: Some("orders".to_string()),
+                    name: "amount".to_string(),
+                    column_type: crate::sql::column::ColumnType::Regular("amount".to_string()),
+                },
+            ],
+            None,
+            vec![join_clause],
+            vec![
+                OrderByClause {
+                    column: Column {
+                        table: Some("orders".to_string()),
+                        name: "amount".to_string(),
+                        column_type: crate::sql::column::ColumnType::Regular("amount".to_string()),
+                    },
+                    direction: OrderDirection::Desc,
+                },
+                OrderByClause {
+                    column: Column {
+                        table: None,
+                        name: "name".to_string(),
+                        column_type: crate::sql::column::ColumnType::Regular("name".to_string()),
+                    },
+                    direction: OrderDirection::Asc,
+                },
+            ],
+        ));
+
+        let result = tm.execute_statement(tx_id, select_stmt).unwrap();
+        
+        if let ReefDBResult::Select(query_result) = result {
+            let rows = query_result.rows;
+            assert_eq!(rows.len(), 3);
+            // Check order: Bob (30), Alice (25), Charlie (20)
+            assert_eq!(rows[0].1[0], DataValue::Text("Bob".to_string()));
+            assert_eq!(rows[0].1[1], DataValue::Integer(30));
+            assert_eq!(rows[1].1[0], DataValue::Text("Alice".to_string()));
+            assert_eq!(rows[1].1[1], DataValue::Integer(25));
+            assert_eq!(rows[2].1[0], DataValue::Text("Charlie".to_string()));
+            assert_eq!(rows[2].1[1], DataValue::Integer(20));
+        } else {
+            panic!("Expected Select result");
+        }
+
+        tm.commit_transaction(tx_id).unwrap();
+    }
+}

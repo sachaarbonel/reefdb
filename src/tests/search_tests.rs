@@ -68,6 +68,7 @@ fn test_fts_search_with_select() -> Result<(), ReefDBError> {
         ],
         Some(where_clause),
         vec![],
+        vec![],
     );
 
     let result = db.execute_statement(Statement::Select(select_stmt))?;

@@ -11,6 +11,7 @@ use crate::sql::{
     clauses::{
         join_clause::JoinClause,
         wheres::where_type::{WhereType, parse_where_clause},
+        order_by::OrderByClause,
     },
     column::{Column, ColumnType},
     data_value::DataValue,
@@ -21,7 +22,7 @@ use crate::sql::statements::Statement;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum SelectStatement {
-    FromTable(TableReference, Vec<Column>, Option<WhereType>, Vec<JoinClause>),
+    FromTable(TableReference, Vec<Column>, Option<WhereType>, Vec<JoinClause>, Vec<OrderByClause>),
 }
 
 impl SelectStatement {
@@ -43,12 +44,18 @@ impl SelectStatement {
             parse_where_clause
         ))(input)?;
 
+        let (input, order_by_clauses) = opt(preceded(
+            multispace0,
+            OrderByClause::parse
+        ))(input)?;
+
         let (input, _) = multispace0(input)?;
         Ok((input, Statement::Select(SelectStatement::FromTable(
             table_ref,
             columns,
             where_clause,
             joins,
+            order_by_clauses.unwrap_or_default(),
         ))))
     }
 }
@@ -143,7 +150,10 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
 mod tests {
     use super::*;
     use crate::sql::{
-        clauses::join_clause::JoinType,
+        clauses::{
+            join_clause::JoinType,
+            order_by::{OrderByClause, OrderDirection},
+        },
         column::Column,
         statements::Statement,
     };
@@ -166,9 +176,32 @@ mod tests {
                     column_type: ColumnType::Regular("name".to_string()),
                 }],
                 None,
-                vec![]
+                vec![],
+                vec![],
             ))
         );
+    }
+
+    #[test]
+    fn parse_select_with_order_by_test() {
+        let input = "SELECT name FROM users ORDER BY age DESC, name ASC";
+        let result = SelectStatement::parse(input);
+        let (_input, statement) = result.unwrap();
+        match statement {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins, order_by)) => {
+                assert_eq!(table_ref.name, "users");
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0].name, "name");
+                assert!(where_clause.is_none());
+                assert!(joins.is_empty());
+                assert_eq!(order_by.len(), 2);
+                assert_eq!(order_by[0].column.name, "age");
+                assert_eq!(order_by[0].direction, OrderDirection::Desc);
+                assert_eq!(order_by[1].column.name, "name");
+                assert_eq!(order_by[1].direction, OrderDirection::Asc);
+            }
+            _ => panic!("Expected Select statement with order by"),
+        }
     }
 
     #[test]
@@ -177,7 +210,7 @@ mod tests {
         let result = SelectStatement::parse(input);
         let (_input, statement) = result.unwrap();
         match statement {
-            Statement::Select(SelectStatement::FromTable(table_ref, columns, Some(WhereType::Regular(where_clause)), joins)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, Some(WhereType::Regular(where_clause)), joins, order_by)) => {
                 assert_eq!(table_ref.name, "users");
                 assert_eq!(columns.len(), 1);
                 assert_eq!(columns[0].name, "name");
@@ -185,6 +218,7 @@ mod tests {
                 assert_eq!(where_clause.operator, Op::Equal);
                 assert_eq!(where_clause.value, DataValue::Integer(1));
                 assert!(joins.is_empty());
+                assert!(order_by.is_empty());
             }
             _ => panic!("Expected Select statement with where clause"),
         }
@@ -208,7 +242,8 @@ mod tests {
                     column_type: ColumnType::Regular("name".to_string()),
                 }],
                 None,
-                vec![]
+                vec![],
+                vec![],
             ))
         );
     }
@@ -231,56 +266,57 @@ mod tests {
                     column_type: ColumnType::Wildcard,
                 }],
                 None,
-                vec![]
+                vec![],
+                vec![],
             ))
         );
     }
 
-    //ts rank test
-    // //"SELECT id,title,ts_rank(to_tsvector(content),to_tsquery('rust')) as rank FROM articles WHERE to_tsvector(content) @@ to_tsquery('rust')"
     #[test]
     fn parse_select_ts_rank_test() {
         let input = "SELECT id,title,ts_rank(to_tsvector(content),to_tsquery('rust')) as rank FROM articles WHERE to_tsvector(content) @@ to_tsquery('rust')";
         let result = SelectStatement::parse(input);
         let (_input, statement) = result.unwrap();
         match statement {
-            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins, order_by)) => {
                 assert_eq!(table_ref.name, "articles");
                 assert_eq!(columns.len(), 3);
                 assert_eq!(columns[0].name, "id");
                 assert_eq!(columns[1].name, "title");
                 assert_eq!(columns[2].name, "rank");
+                assert!(joins.is_empty());
+                assert!(order_by.is_empty());
             }
             _ => panic!("Expected Select statement with ts_rank"),
         }
     }
 
-   
     #[test]
     fn parse_select_join_test2() {
         let input = "SELECT authors.name, books.title, books.year FROM authors INNER JOIN books ON authors.id = books.author_id WHERE books.year > 2020";
         let result = SelectStatement::parse(input);
         let (_input, statement) = result.unwrap();
         match statement {
-            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins)) => {
-                    assert_eq!(table_ref.name, "authors");
-                    assert_eq!(columns.len(), 3);
-                    assert_eq!(columns[0].name, "name");
-                    assert_eq!(columns[1].name, "title");
-                    assert_eq!(columns[2].name, "year");
-                    assert_eq!(joins.len(), 1);
-                    assert_eq!(joins[0].join_type, JoinType::Inner);
-                    assert_eq!(joins[0].table_ref.name, "books");
-                    assert_eq!(joins[0].on.0.column_name, "id");
-                    assert_eq!(joins[0].on.1.column_name, "author_id");
-                    match where_clause.unwrap() {
-                        WhereType::Regular(where_clause) => {
-                            assert_eq!(where_clause.col_name, "year");
-                            assert_eq!(where_clause.operator, Op::GreaterThan);
-                            assert_eq!(where_clause.value, DataValue::Integer(2020));
-                        }
-                        _ => panic!("Expected Select statement with where clause"),
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins, order_by)) => {
+                assert_eq!(table_ref.name, "authors");
+                assert_eq!(columns.len(), 3);
+                assert_eq!(columns[0].name, "name");
+                assert_eq!(columns[1].name, "title");
+                assert_eq!(columns[2].name, "year");
+                assert_eq!(joins.len(), 1);
+                assert_eq!(joins[0].join_type, JoinType::Inner);
+                assert_eq!(joins[0].table_ref.name, "books");
+                assert_eq!(joins[0].on.0.column_name, "id");
+                assert_eq!(joins[0].on.1.column_name, "author_id");
+                assert!(order_by.is_empty());
+                match where_clause.unwrap() {
+                    WhereType::Regular(where_clause) => {
+                        assert_eq!(where_clause.col_name, "year");
+                        assert_eq!(where_clause.operator, Op::GreaterThan);
+                        assert_eq!(where_clause.value, DataValue::Integer(2020));
                     }
+                    _ => panic!("Expected Select statement with where clause"),
+                }
             }
             _ => panic!("Expected Select statement with join"),
         }
@@ -292,19 +328,20 @@ mod tests {
         let result = SelectStatement::parse(input);
         let (_input, statement) = result.unwrap();
         match statement {
-            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins, order_by)) => {
                 assert_eq!(table_ref.name, "books");
                 assert_eq!(columns.len(), 1);
                 assert_eq!(columns[0].name, "*");
-              //match regular where clause
-              match where_clause.unwrap() {
-                WhereType::Regular(where_clause) => {
-                    assert_eq!(where_clause.col_name, "year");
-                    assert_eq!(where_clause.operator, Op::GreaterThan);
-                    assert_eq!(where_clause.value, DataValue::Integer(2020));
+                assert!(joins.is_empty());
+                assert!(order_by.is_empty());
+                match where_clause.unwrap() {
+                    WhereType::Regular(where_clause) => {
+                        assert_eq!(where_clause.col_name, "year");
+                        assert_eq!(where_clause.operator, Op::GreaterThan);
+                        assert_eq!(where_clause.value, DataValue::Integer(2020));
+                    }
+                    _ => panic!("Expected Select statement with where clause"),
                 }
-                _ => panic!("Expected Select statement with where clause"),
-            }
             }
             _ => panic!("Expected Select statement with where clause"),
         }
@@ -316,7 +353,7 @@ mod tests {
         let result = SelectStatement::parse(input);
         let (_input, statement) = result.unwrap();
         match statement {
-            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins)) => {
+            Statement::Select(SelectStatement::FromTable(table_ref, columns, where_clause, joins, order_by)) => {
                 assert_eq!(table_ref.name, "users");
                 assert_eq!(table_ref.alias, Some("u".to_string()));
                 assert_eq!(columns.len(), 2);
@@ -329,6 +366,7 @@ mod tests {
                 assert_eq!(joins[0].join_type, JoinType::Inner);
                 assert_eq!(joins[0].table_ref.name, "posts");
                 assert_eq!(joins[0].table_ref.alias, Some("p".to_string()));
+                assert!(order_by.is_empty());
             }
             _ => panic!("Expected Select statement with join"),
         }

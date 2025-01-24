@@ -37,6 +37,7 @@ fn test_insert_statement() -> Result<(), ReefDBError> {
         vec![Column { name: "*".to_string(), table: None ,column_type: ColumnType::Wildcard}],
         None,
         vec![],
+        vec![],
     );
     let result = db.execute_statement(Statement::Select(select_stmt))?;
     if let ReefDBResult::Select(rows) = result {
@@ -101,6 +102,7 @@ fn test_insert_statement() -> Result<(), ReefDBError> {
         },
         vec![Column { name: "*".to_string(), table: None, column_type: ColumnType::Wildcard }],
         None,
+        vec![],
         vec![],
     );
     let result = db.execute_statement(Statement::Select(select_stmt))?;

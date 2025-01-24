@@ -4,6 +4,7 @@ mod state_handler;
 pub use savepoint_handler::SavepointHandler;
 pub use state_handler::{TransactionState, TransactionStateHandler, IsolationLevel};
 use crate::fts::search::Search;
+use crate::sql::clauses::order_by;
 use crate::{
     error::ReefDBError,
     result::ReefDBResult,
@@ -198,8 +199,8 @@ where
             Statement::Create(CreateStatement::Table(name, columns)) => {
                 self.reef_db.handle_create(name, columns)
             },
-            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, joins)) => {
-                self.reef_db.handle_select(table_name, columns, where_clause, joins)
+            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, joins, order_by)) => {
+                self.reef_db.handle_select(table_name, columns, where_clause, joins, order_by)
             },
             Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
                 self.reef_db.handle_insert(table_name, values)

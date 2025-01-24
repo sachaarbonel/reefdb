@@ -44,6 +44,7 @@ fn test_add_column() {
         vec![Column { name: "age".to_string(), table: None, column_type: ColumnType::Regular("age".to_string()) }],
         None,
         vec![],
+        vec![],
     ));
     if let ReefDBResult::Select(rows) = db.execute_statement(stmt).unwrap() {
         assert_eq!(rows.len(), 1);
@@ -95,6 +96,7 @@ fn test_drop_column() {
         vec![Column { name: "*".to_string(), table: None ,column_type: ColumnType::Wildcard}],
         None,
         vec![],
+        vec![],
     ));
     if let ReefDBResult::Select(rows) = db.execute_statement(stmt).unwrap() {
         assert_eq!(rows.len(), 1);
@@ -142,6 +144,7 @@ fn test_rename_column() {
         },
         vec![Column { name: "username".to_string(), table: None ,column_type: ColumnType::Regular("username".to_string())}],
         None,
+        vec![],
         vec![],
     ));
     if let ReefDBResult::Select(rows) = db.execute_statement(stmt).unwrap() {
