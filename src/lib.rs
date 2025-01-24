@@ -16,12 +16,12 @@ use crate::sql::{
     statements::{
         Statement,
         create::CreateStatement,
+        drop::DropStatement,
+        alter::{AlterStatement, AlterType},
         insert::InsertStatement,
         select::SelectStatement,
         update::UpdateStatement,
         delete::DeleteStatement,
-        alter::{AlterStatement, AlterType},
-        drop::DropStatement,
         create_index::CreateIndexStatement,
         drop_index::DropIndexStatement,
     },
@@ -783,49 +783,274 @@ where
     }
 
     pub fn execute_statement(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
+        // If we're in an explicit transaction, just execute the statement
+        if self.current_transaction_id.is_some() {
+            match &stmt {
+                Statement::BeginTransaction => {
+                    return Err(ReefDBError::Other("Cannot begin a transaction within another transaction".to_string()));
+                }
+                _ => return self.execute_statement_in_transaction(stmt),
+            }
+        }
+
+        match &stmt {
+            Statement::BeginTransaction => {
+                if let Some(tx_id) = self.current_transaction_id {
+                    return Err(ReefDBError::Other("Cannot begin a new transaction while another transaction is active".to_string()));
+                }
+                let tx_id = self.transaction_manager.as_mut().unwrap().begin_transaction(IsolationLevel::ReadCommitted)?;
+                self.current_transaction_id = Some(tx_id);
+                return Ok(ReefDBResult::BeginTransaction);
+            }
+            Statement::Commit => return self.handle_commit(),
+            _ => {}
+        }
+
+        // If autocommit is enabled, wrap the statement in an implicit transaction
+        if self.autocommit {
+            // Start an implicit transaction
+            let tx_id = self.handle_begin_transaction()
+                .and_then(|_| {
+                    if let Some(tm) = &mut self.transaction_manager {
+                        tm.begin_transaction(self.autocommit_isolation_level)
+                    } else {
+                        Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+                    }
+                })?;
+            self.current_transaction_id = Some(tx_id);
+
+            // Execute the statement
+            let result = self.execute_statement_in_transaction(stmt);
+
+            // Commit or rollback based on the result
+            match &result {
+                Ok(_) => {
+                    self.handle_commit()?;
+                }
+                Err(_) => {
+                    // Best effort rollback - if it fails, we can't do much about it
+                    if let Some(tx_id) = self.current_transaction_id {
+                        if let Some(tm) = &mut self.transaction_manager {
+                            let _ = tm.rollback_transaction(tx_id);
+                        }
+                    }
+                }
+            }
+
+            self.current_transaction_id = None;
+            result
+        } else {
+            // When autocommit is disabled, require explicit transactions for all statements except BEGIN and DDL
+            match stmt {
+                Statement::BeginTransaction => {
+                    if self.current_transaction_id.is_some() {
+                        return Err(ReefDBError::Other("Cannot begin a transaction within another transaction".to_string()));
+                    }
+                    self.handle_begin_transaction()
+                }
+                Statement::Create(create_stmt) => {
+                    match create_stmt {
+                        CreateStatement::Table(table_name, columns) => {
+                            if !self.autocommit && self.current_transaction_id.is_none() {
+                                // Start an implicit transaction for DDL statements
+                                let tx_id = self.transaction_manager.as_mut().unwrap().begin_transaction(IsolationLevel::ReadCommitted)?;
+                                self.current_transaction_id = Some(tx_id);
+                                let result = self.handle_create(table_name, columns)?;
+                                // Commit the implicit transaction
+                                self.transaction_manager.as_mut().unwrap().commit_transaction(tx_id)?;
+                                self.current_transaction_id = None;
+                                Ok(result)
+                            } else {
+                                self.handle_create(table_name, columns)
+                            }
+                        }
+                    }
+                }
+                Statement::Drop(drop_stmt) => {
+                    // If we're in a transaction, execute the DDL statement in that transaction
+                    if let Some(_) = self.current_transaction_id {
+                        return self.execute_statement_in_transaction(Statement::Drop(drop_stmt));
+                    }
+
+                    // Otherwise, start an implicit transaction for DDL
+                    let tx_id = self.handle_begin_transaction()
+                        .and_then(|_| {
+                            if let Some(tm) = &mut self.transaction_manager {
+                                tm.begin_transaction(self.autocommit_isolation_level)
+                            } else {
+                                Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+                            }
+                        })?;
+                    self.current_transaction_id = Some(tx_id);
+
+                    // Execute the DDL statement
+                    let result = self.execute_statement_in_transaction(Statement::Drop(drop_stmt));
+
+                    // Commit or rollback based on the result
+                    match &result {
+                        Ok(_) => {
+                            self.handle_commit()?;
+                        }
+                        Err(_) => {
+                            // Best effort rollback - if it fails, we can't do much about it
+                            if let Some(tx_id) = self.current_transaction_id {
+                                if let Some(tm) = &mut self.transaction_manager {
+                                    let _ = tm.rollback_transaction(tx_id);
+                                }
+                            }
+                        }
+                    }
+
+                    self.current_transaction_id = None;
+                    result
+                }
+                Statement::Alter(alter_stmt) => {
+                    // If we're in a transaction, execute the DDL statement in that transaction
+                    if let Some(_) = self.current_transaction_id {
+                        return self.execute_statement_in_transaction(Statement::Alter(alter_stmt));
+                    }
+
+                    // Otherwise, start an implicit transaction for DDL
+                    let tx_id = self.handle_begin_transaction()
+                        .and_then(|_| {
+                            if let Some(tm) = &mut self.transaction_manager {
+                                tm.begin_transaction(self.autocommit_isolation_level)
+                            } else {
+                                Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+                            }
+                        })?;
+                    self.current_transaction_id = Some(tx_id);
+
+                    // Execute the DDL statement
+                    let result = self.execute_statement_in_transaction(Statement::Alter(alter_stmt));
+
+                    // Commit or rollback based on the result
+                    match &result {
+                        Ok(_) => {
+                            self.handle_commit()?;
+                        }
+                        Err(_) => {
+                            // Best effort rollback - if it fails, we can't do much about it
+                            if let Some(tx_id) = self.current_transaction_id {
+                                if let Some(tm) = &mut self.transaction_manager {
+                                    let _ = tm.rollback_transaction(tx_id);
+                                }
+                            }
+                        }
+                    }
+
+                    self.current_transaction_id = None;
+                    result
+                }
+                Statement::Select(select_stmt) => {
+                    // If we're in a transaction, execute the select statement in that transaction
+                    if let Some(_) = self.current_transaction_id {
+                        return self.execute_statement_in_transaction(Statement::Select(select_stmt));
+                    }
+
+                    // Otherwise, start an implicit read-only transaction
+                    let tx_id = self.handle_begin_transaction()
+                        .and_then(|_| {
+                            if let Some(tm) = &mut self.transaction_manager {
+                                tm.begin_transaction(IsolationLevel::ReadCommitted)
+                            } else {
+                                Err(ReefDBError::Other("Transaction manager not initialized".to_string()))
+                            }
+                        })?;
+                    self.current_transaction_id = Some(tx_id);
+
+                    // Execute the select statement
+                    let result = self.execute_statement_in_transaction(Statement::Select(select_stmt));
+
+                    // Commit or rollback based on the result
+                    match &result {
+                        Ok(_) => {
+                            self.handle_commit()?;
+                        }
+                        Err(_) => {
+                            // Best effort rollback - if it fails, we can't do much about it
+                            if let Some(tx_id) = self.current_transaction_id {
+                                if let Some(tm) = &mut self.transaction_manager {
+                                    let _ = tm.rollback_transaction(tx_id);
+                                }
+                            }
+                        }
+                    }
+
+                    self.current_transaction_id = None;
+                    result
+                }
+                _ => {
+                    // If we're in a transaction, execute the statement in that transaction
+                    if let Some(_) = self.current_transaction_id {
+                        return self.execute_statement_in_transaction(stmt);
+                    }
+                    Err(ReefDBError::TransactionNotActive)
+                }
+            }
+        }
+    }
+
+    fn execute_statement_in_transaction(&mut self, stmt: Statement) -> Result<ReefDBResult, ReefDBError> {
         match stmt {
             Statement::Create(CreateStatement::Table(name, columns)) => {
                 self.handle_create(name, columns)
-            },
-            Statement::Insert(InsertStatement::IntoTable(table_name, values)) => {
-                self.handle_insert(table_name, values)
-            },
-            Statement::Select(SelectStatement::FromTable(table_name, columns, where_clause, joins, order_by)) => {
-                self.handle_select(table_name, columns, where_clause, joins, order_by)
-            },
-            Statement::Update(UpdateStatement::UpdateTable(table_name, updates, where_clause)) => {
-                self.handle_update(table_name, updates, where_clause)
-            },
-            Statement::Delete(DeleteStatement::FromTable(table_name, where_clause)) => {
-                self.handle_delete(table_name, where_clause)
-            },
-            Statement::Alter(AlterStatement { table_name, alter_type }) => {
-                self.handle_alter(table_name, alter_type)
-            },
-            Statement::Drop(DropStatement { table_name }) => {
-                self.handle_drop(table_name)
-            },
-            Statement::CreateIndex(stmt) => {
-                self.handle_create_index(stmt)
-            },
-            Statement::DropIndex(stmt) => {
-                self.handle_drop_index(stmt)
-            },
-            Statement::Savepoint(stmt) => {
-                self.handle_savepoint(stmt.name)
-            },
+            }
+            Statement::Insert(insert_stmt) => {
+                match insert_stmt {
+                    InsertStatement::IntoTable(table_name, values) => {
+                        self.handle_insert(table_name, values)
+                    }
+                }
+            }
+            Statement::Select(select_stmt) => {
+                match select_stmt {
+                    SelectStatement::FromTable(table_ref, columns, where_clause, joins, order_by) => {
+                        self.handle_select(table_ref, columns, where_clause, joins, order_by)
+                    }
+                }
+            }
+            Statement::Update(update_stmt) => {
+                match update_stmt {
+                    UpdateStatement::UpdateTable(table_name, updates, where_clause) => {
+                        self.handle_update(table_name, updates, where_clause)
+                    }
+                }
+            }
+            Statement::Delete(delete_stmt) => {
+                match delete_stmt {
+                    DeleteStatement::FromTable(table_name, where_clause) => {
+                        self.handle_delete(table_name, where_clause)
+                    }
+                }
+            }
+            Statement::Alter(alter_stmt) => {
+                self.handle_alter(alter_stmt.table_name, alter_stmt.alter_type)
+            }
+            Statement::Drop(drop_stmt) => {
+                self.handle_drop(drop_stmt.table_name)
+            }
+            Statement::CreateIndex(create_idx_stmt) => {
+                self.handle_create_index(create_idx_stmt)
+            }
+            Statement::DropIndex(drop_idx_stmt) => {
+                self.handle_drop_index(drop_idx_stmt)
+            }
+            Statement::Savepoint(savepoint_stmt) => {
+                self.handle_savepoint(savepoint_stmt.name)
+            }
             Statement::RollbackToSavepoint(name) => {
                 self.handle_rollback_to_savepoint(name)
-            },
+            }
             Statement::ReleaseSavepoint(name) => {
                 self.handle_release_savepoint(name)
-            },
+            }
             Statement::BeginTransaction => {
-                self.handle_begin_transaction()
-            },
+                Err(ReefDBError::Other("Cannot begin a transaction within another transaction".to_string()))
+            }
             Statement::Commit => {
                 self.handle_commit()
-            },
+            }
         }
     }
 
@@ -833,5 +1058,21 @@ where
         use crate::sql::parser::Parser;
         let stmt = Parser::parse_sql(sql)?;
         self.execute_statement(stmt)
+    }
+
+    pub fn set_autocommit(&mut self, enabled: bool) {
+        self.autocommit = enabled;
+    }
+
+    pub fn is_autocommit(&self) -> bool {
+        self.autocommit
+    }
+
+    pub fn set_autocommit_isolation_level(&mut self, level: IsolationLevel) {
+        self.autocommit_isolation_level = level;
+    }
+
+    pub fn get_autocommit_isolation_level(&self) -> IsolationLevel {
+        self.autocommit_isolation_level
     }
 }

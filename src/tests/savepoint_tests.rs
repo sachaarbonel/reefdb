@@ -3,7 +3,7 @@ mod tests {
     use crate::{
         InMemoryReefDB,
         sql::{
-            statements::{Statement, create::CreateStatement, insert::InsertStatement},
+            statements::{Statement, create::CreateStatement, insert::InsertStatement, SavepointStatement},
             column_def::ColumnDef,
             data_type::DataType,
             data_value::DataValue,
@@ -76,12 +76,18 @@ mod tests {
     #[test]
     fn test_savepoint_without_transaction() -> Result<(), ReefDBError> {
         let mut db = InMemoryReefDB::create_in_memory()?;
-
-        // Try to create a savepoint without an active transaction
-        let (_, savepoint_stmt) = Statement::parse("SAVEPOINT sp1").unwrap();
+        
+        // Disable autocommit to ensure we need explicit transactions
+        db.set_autocommit(false);
+        
+        // Try to create a savepoint without a transaction
+        let savepoint_stmt = Statement::Savepoint(SavepointStatement {
+            name: "sp1".to_string(),
+        });
+        
         let result = db.execute_statement(savepoint_stmt);
         assert!(matches!(result, Err(ReefDBError::TransactionNotActive)));
-
+        
         Ok(())
     }
 

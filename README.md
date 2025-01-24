@@ -94,9 +94,11 @@ fn main() {
 - ✅ Full ACID compliance
 - ✅ Deadlock detection
 - ✅ MVCC implementation
-
+- ✅ Savepoints
+- ✅ Autocommit
 ### Indexing
 - ✅ B-Tree index implementation
+- ✅ GIN index implementation
 - ✅ CREATE INDEX and DROP INDEX support
 - ✅ Index persistence for on-disk storage
 - ✅ Basic query optimization with indexes
@@ -130,7 +132,7 @@ fn main() {
 
 #### Query Processing Essentials
 - [ ] Basic aggregate functions (COUNT, SUM)
-- [ ] ORDER BY implementation
+- [x] ORDER BY implementation
 - [ ] LIMIT and OFFSET support
 - [ ] LEFT JOIN support
 - [ ] Query timeout mechanism
