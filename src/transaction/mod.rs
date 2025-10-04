@@ -45,7 +45,26 @@ where
     FTS::NewArgs: Clone,
 {
     pub fn create(reef_db: ReefDB<S, FTS>, isolation_level: IsolationLevel) -> Self {
+        // Deprecated: random ID; prefer create_with_id
         let id = rand::random::<u64>();
+        let state_handler = TransactionStateHandler::new(id, isolation_level);
+        let savepoint_handler = SavepointHandler::new();
+        let acid_manager = AcidManager::new(reef_db.tables.clone(), isolation_level);
+
+        let mut transaction = Transaction {
+            state_handler,
+            savepoint_handler,
+            reef_db: reef_db.clone(),
+            acid_manager,
+        };
+
+        // Take initial snapshot
+        transaction.acid_manager.begin_atomic(&reef_db.tables);
+
+        transaction
+    }
+
+    pub fn create_with_id(reef_db: ReefDB<S, FTS>, isolation_level: IsolationLevel, id: u64) -> Self {
         let state_handler = TransactionStateHandler::new(id, isolation_level);
         let savepoint_handler = SavepointHandler::new();
         let acid_manager = AcidManager::new(reef_db.tables.clone(), isolation_level);

@@ -8,10 +8,7 @@ use crate::result::{ColumnInfo, QueryResult};
 use crate::{
     deadlock::DeadlockDetector,
     error::ReefDBError,
-    indexes::{
-        index_manager::IndexManager,
-       
-    },
+    indexes::index_manager::IndexManager,
     key_format::KeyFormat,
     locks::LockManager,
     locks::LockType,
@@ -44,17 +41,13 @@ use crate::{
             Statement,
         },
     },
-    storage::{
-        memory::InMemoryStorage,
-        Storage,
-        TableStorage,
-    },
+    storage::{Storage, TableStorage},
     transaction::{
         Transaction,
         IsolationLevel,
         TransactionState,
     },
-    wal::{WriteAheadLog, WALEntry, WALOperation},
+    wal::WriteAheadLog,
     ReefDB,
 };
 
@@ -70,6 +63,7 @@ where
     mvcc_manager: Arc<Mutex<MVCCManager>>,
     deadlock_detector: Arc<Mutex<DeadlockDetector>>,
     savepoint_manager: Arc<Mutex<SavepointManager>>,
+    next_tx_id: u64,
 }
 
 // Helper structs
@@ -96,6 +90,7 @@ where
             mvcc_manager: reef_db.mvcc_manager.clone(),
             deadlock_detector: Arc::new(Mutex::new(DeadlockDetector::new())),
             savepoint_manager: Arc::new(Mutex::new(SavepointManager::new())),
+            next_tx_id: 1,
         }
     }
 
@@ -103,8 +98,9 @@ where
         let reef_db = self.reef_db.lock()
             .map_err(|_| ReefDBError::Other("Failed to acquire database lock".to_string()))?;
         
-        let transaction = Transaction::create((*reef_db).clone(), isolation_level);
-        let id = transaction.get_id();
+        let id = self.next_tx_id;
+        self.next_tx_id = self.next_tx_id.saturating_add(1);
+        let transaction = Transaction::create_with_id((*reef_db).clone(), isolation_level, id);
         
         // Initialize MVCC timestamp for the transaction
         self.mvcc_manager.lock()
@@ -126,18 +122,13 @@ where
         // Get the final transaction state before commit
         let final_state = transaction.get_table_state();
 
-        // Write to WAL before committing
-        let wal_entry = WALEntry {
-            transaction_id: id,
-            timestamp: std::time::SystemTime::now(),
-            operation: WALOperation::Commit,
-            table_name: String::new(),
-            data: vec![],
-        };
-
-        self.wal.lock()
-            .map_err(|_| ReefDBError::Other("Failed to acquire WAL lock".to_string()))?
-            .append_entry(wal_entry)?;
+        // Build command batch (placeholder; DML commands should be captured during execution)
+        {
+            let mut reef_db_for_apply = self.reef_db.lock()
+                .map_err(|_| ReefDBError::Other("Failed to acquire database lock".to_string()))?;
+            let batch = crate::state_machine::CommandBatch { id: reef_db_for_apply.next_command_id(), commands: vec![] };
+            let _ = reef_db_for_apply.apply_batch(batch)?;
+        }
 
         // Commit MVCC changes first
         let commit_result = self.mvcc_manager.lock()
@@ -293,18 +284,7 @@ where
             reef_db.storage.insert_table(table_name.clone(), columns.clone(), rows.clone());
         }
         
-        // Write WAL entry for rollback
-        let wal_entry = WALEntry {
-            transaction_id,
-            timestamp: std::time::SystemTime::now(),
-            operation: WALOperation::Rollback,
-            table_name: String::new(),
-            data: vec![],
-        };
-        
-        self.wal.lock()
-            .map_err(|_| ReefDBError::LockAcquisitionFailed("Failed to acquire WAL lock".to_string()))?
-            .append_entry(wal_entry)?;
+        // No WAL for rollback; state is restored from savepoint manager and MVCC rollback
         
         Ok(restored_state)
     }
@@ -395,7 +375,7 @@ where
                 None
             }
         } else if left_pair.table_name == right_table {
-            if let Some(idx) = right_schema.iter().position(|c| c.name == left_pair.column_name) {
+            if let Some(idx) = left_schema.iter().position(|c| c.name == left_pair.column_name) {
                 Some(&right_data[idx])
             } else {
                 None

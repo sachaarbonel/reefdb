@@ -16,8 +16,7 @@ use crate::sql::{
     statements::{
         Statement,
         create::CreateStatement,
-        drop::DropStatement,
-        alter::{AlterStatement, AlterType},
+        alter::{AlterType},
         insert::InsertStatement,
         select::SelectStatement,
         update::UpdateStatement,
@@ -33,9 +32,10 @@ use crate::transaction_manager::TransactionManager;
 use crate::wal::WriteAheadLog;
 use crate::mvcc::MVCCManager;
 use crate::storage::{Storage, TableStorage};
-use crate::indexes::{index_manager::IndexManager, btree::BTreeIndex, index_manager::IndexType};
+use crate::indexes::{index_manager::IndexManager};
 use crate::fts::search::Search;
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 
@@ -55,6 +55,8 @@ pub mod locks;
 pub mod key_format;
 pub mod fts;
 pub mod functions;
+pub mod state_machine;
+pub mod snapshot;
 #[cfg(test)]
 pub mod tests;
 
@@ -77,6 +79,8 @@ impl InMemoryReefDB {
             mvcc_manager: Arc::new(Mutex::new(MVCCManager::new())),
             current_transaction_id: None,
             function_registry: function_registry,
+            applied_commands: HashMap::new(),
+            next_command_id: 1,
         };
         db.transaction_manager = Some(TransactionManager::create(
             db.clone(),
@@ -115,6 +119,8 @@ where
     pub(crate) mvcc_manager: Arc<Mutex<MVCCManager>>,
     pub(crate) current_transaction_id: Option<u64>,
     pub(crate) function_registry: FunctionRegistry,
+    pub(crate) applied_commands: HashMap<crate::state_machine::CommandId, crate::state_machine::ApplyOutcome>,
+    pub(crate) next_command_id: crate::state_machine::CommandId,
 }
 
 impl<S: Storage + IndexManager + Clone + Any, FTS: Search + Clone> ReefDB<S, FTS>
@@ -135,6 +141,8 @@ where
             mvcc_manager: Arc::new(Mutex::new(MVCCManager::new())),
             current_transaction_id: None,
             function_registry: function_registry,
+            applied_commands: HashMap::new(),
+            next_command_id: 1,
         };
 
         let transaction_manager = Some(TransactionManager::create(
@@ -159,76 +167,19 @@ where
     }
 
     fn handle_create(&mut self, name: String, columns: Vec<ColumnDef>) -> Result<ReefDBResult, ReefDBError> {
-        if columns.is_empty() {
-            return Err(ReefDBError::Other("Cannot create table with empty column list".to_string()));
+        use crate::state_machine::{ApplyOutcome, ReplicatedCommand};
+        match self.apply_new(ReplicatedCommand::CreateTable { name, columns })? {
+            ApplyOutcome::CreateTable => Ok(ReefDBResult::CreateTable),
+            _ => Err(ReefDBError::Other("Unexpected apply outcome".to_string())),
         }
-        
-        // Check if table exists in either storage or tables
-        if self.storage.table_exists(&name) || self.tables.table_exists(&name) {
-            return Err(ReefDBError::Other(format!("Table {} already exists", name)));
-        }
-        
-        // Create table in both storage and tables
-        self.storage.insert_table(name.clone(), columns.clone(), vec![]);
-        self.tables.insert_table(name.clone(), columns.clone(), vec![]);
-
-        // Register FTS columns with the inverted index
-        for column in columns.iter() {
-            if column.data_type == DataType::TSVector {
-                self.inverted_index.add_column(&name, &column.name);
-            }
-        }
-
-        // Ensure the table was created successfully
-        if !self.storage.table_exists(&name) || !self.tables.table_exists(&name) {
-            return Err(ReefDBError::Other("Failed to create table".to_string()));
-        }
-
-        Ok(ReefDBResult::CreateTable)
     }
 
     fn handle_insert(&mut self, table_name: String, values: Vec<DataValue>) -> Result<ReefDBResult, ReefDBError> {
-        // First, collect all the information we need
-        let schema = {
-            let (schema, _) = self.get_table_schema(&table_name)?;
-            schema.clone()
-        };
-
-        // Validate number of values matches number of columns
-        if values.len() != schema.len() {
-            return Err(ReefDBError::Other(format!(
-                "Number of values ({}) does not match number of columns ({})",
-                values.len(),
-                schema.len()
-            )));
+        use crate::state_machine::{ApplyOutcome, ReplicatedCommand};
+        match self.apply_new(ReplicatedCommand::InsertRow { table: table_name, values })? {
+            ApplyOutcome::Insert { row_id } => Ok(ReefDBResult::Insert(row_id)),
+            _ => Err(ReefDBError::Other("Unexpected apply outcome".to_string())),
         }
-
-        // Validate value types match column types
-        for (value, column) in values.iter().zip(schema.iter()) {
-            if !value.matches_type(&column.data_type) {
-                return Err(ReefDBError::Other(format!(
-                    "Value type mismatch for column {}: expected {:?}, got {:?}",
-                    column.name,
-                    column.data_type,
-                    value
-                )));
-            }
-        }
-
-        // Insert the values into both storage and tables
-        let row_id = self.storage.push_value(&table_name, values.clone())?;
-        self.tables.push_value(&table_name, values.clone())?;
-
-        // Update FTS index for any FTS columns
-        for (i, col) in schema.iter().enumerate() {
-            if col.data_type == DataType::TSVector {
-                if let DataValue::Text(text) = &values[i] {
-                    self.inverted_index.add_document(&table_name, &col.name, row_id, text);
-                }
-            }
-        }
-
-        Ok(ReefDBResult::Insert(row_id))
     }
 
     fn handle_select(
@@ -575,16 +526,19 @@ where
             self.validate_where_clause(where_clause, &schema)?;
         }
 
-        // Convert WhereType to simple where clause for storage layer
-        let storage_where = where_clause.and_then(|w| match w {
+        // Convert WhereType to simple where clause for state machine
+        let where_simple = where_clause.and_then(|w| match w {
             WhereType::Regular(clause) => Some((clause.col_name, clause.value)),
-            WhereType::FTS(_) => None, // FTS not supported for updates
-            WhereType::And(_, _) => None, // Complex conditions not supported for updates
-            WhereType::Or(_, _) => None, // Complex conditions not supported for updates
+            WhereType::FTS(_) => None,
+            WhereType::And(_, _) => None,
+            WhereType::Or(_, _) => None,
         });
 
-        let updated_count = self.storage.update_table(&table_name, updates, storage_where);
-        Ok(ReefDBResult::Update(updated_count))
+        use crate::state_machine::{ApplyOutcome, ReplicatedCommand};
+        match self.apply_new(ReplicatedCommand::UpdateRows { table: table_name, updates, where_clause: where_simple })? {
+            ApplyOutcome::Update { updated } => Ok(ReefDBResult::Update(updated)),
+            _ => Err(ReefDBError::Other("Unexpected apply outcome".to_string())),
+        }
     }
 
     fn validate_where_clause(&self, where_clause: &WhereType, schema: &[ColumnDef]) -> Result<(), ReefDBError> {
@@ -624,56 +578,50 @@ where
             self.validate_where_clause(where_clause, &schema)?;
         }
 
-        // Convert WhereType to simple where clause for storage layer
-        let storage_where = where_clause.and_then(|w| match w {
+        // Convert WhereType to simple where clause for state machine
+        let where_simple = where_clause.and_then(|w| match w {
             WhereType::Regular(clause) => Some((clause.col_name, clause.value)),
-            WhereType::FTS(_) => None, // FTS not supported for deletes
-            WhereType::And(_, _) => None, // Complex conditions not supported for deletes
-            WhereType::Or(_, _) => None, // Complex conditions not supported for deletes
+            WhereType::FTS(_) => None,
+            WhereType::And(_, _) => None,
+            WhereType::Or(_, _) => None,
         });
 
-        let deleted_count = self.storage.delete_table(&table_name, storage_where);
-        Ok(ReefDBResult::Delete(deleted_count))
+        use crate::state_machine::{ApplyOutcome, ReplicatedCommand};
+        match self.apply_new(ReplicatedCommand::DeleteRows { table: table_name, where_clause: where_simple })? {
+            ApplyOutcome::Delete { deleted } => Ok(ReefDBResult::Delete(deleted)),
+            _ => Err(ReefDBError::Other("Unexpected apply outcome".to_string())),
+        }
     }
 
     fn handle_alter(&mut self, table_name: String, alter_type: AlterType) -> Result<ReefDBResult, ReefDBError> {
         self.verify_table_exists(&table_name)?;
         let (schema, _) = self.get_table_schema(&table_name)?;
 
-        match alter_type {
+        use crate::state_machine::{ApplyOutcome, ReplicatedCommand};
+        let outcome = match alter_type {
             AlterType::AddColumn(column_def) => {
-                // Verify column doesn't already exist
-                if schema.iter().any(|c| c.name == column_def.name) {
-                    return Err(ReefDBError::Other(
-                        format!("Column {} already exists in table {}", column_def.name, table_name)
-                    ));
-                }
-
-                self.storage.add_column(&table_name, column_def)?;
-            },
-            AlterType::DropColumn(column_name) => {
-                self.storage.drop_column(&table_name, &column_name)?;
-            },
-            AlterType::RenameColumn(old_name, new_name) => {
-                // Verify new name doesn't already exist
-                if schema.iter().any(|c| c.name == new_name) {
-                    return Err(ReefDBError::Other(
-                        format!("Column {} already exists in table {}", new_name, table_name)
-                    ));
-                }
-
-                self.storage.rename_column(&table_name, &old_name, &new_name)?;
+                self.apply_new(ReplicatedCommand::AlterAddColumn { table: table_name, column_def })?
             }
+            AlterType::DropColumn(column_name) => {
+                self.apply_new(ReplicatedCommand::AlterDropColumn { table: table_name, column_name })?
+            }
+            AlterType::RenameColumn(old_name, new_name) => {
+                self.apply_new(ReplicatedCommand::AlterRenameColumn { table: table_name, old_name, new_name })?
+            }
+        };
+        match outcome {
+            ApplyOutcome::AlterTable => Ok(ReefDBResult::AlterTable),
+            _ => Err(ReefDBError::Other("Unexpected apply outcome".to_string())),
         }
-
-        Ok(ReefDBResult::AlterTable)
     }
 
     fn handle_drop(&mut self, table_name: String) -> Result<ReefDBResult, ReefDBError> {
         self.verify_table_exists(&table_name)?;
-        self.storage.drop_table(&table_name);
-        self.tables.drop_table(&table_name);
-        Ok(ReefDBResult::DropTable)
+        use crate::state_machine::{ApplyOutcome, ReplicatedCommand};
+        match self.apply_new(ReplicatedCommand::DropTable { name: table_name })? {
+            ApplyOutcome::DropTable => Ok(ReefDBResult::DropTable),
+            _ => Err(ReefDBError::Other("Unexpected apply outcome".to_string())),
+        }
     }
 
     fn handle_create_index(&mut self, stmt: CreateIndexStatement) -> Result<ReefDBResult, ReefDBError> {
@@ -685,11 +633,11 @@ where
             return Err(ReefDBError::ColumnNotFound(stmt.column_name));
         }
 
-        // Create B-Tree index
-        let btree = BTreeIndex::new();
-        self.storage.create_index(&stmt.table_name, &stmt.column_name, IndexType::BTree(btree));
-
-        Ok(ReefDBResult::CreateIndex)
+        use crate::state_machine::{ApplyOutcome, ReplicatedCommand};
+        match self.apply_new(ReplicatedCommand::CreateIndex { table: stmt.table_name, column: stmt.column_name })? {
+            ApplyOutcome::CreateIndex => Ok(ReefDBResult::CreateIndex),
+            _ => Err(ReefDBError::Other("Unexpected apply outcome".to_string())),
+        }
     }
 
     fn handle_drop_index(&mut self, stmt: DropIndexStatement) -> Result<ReefDBResult, ReefDBError> {
@@ -701,10 +649,11 @@ where
             return Err(ReefDBError::ColumnNotFound(stmt.column_name));
         }
 
-        // Drop the index
-        self.storage.drop_index(&stmt.table_name, &stmt.column_name);
-
-        Ok(ReefDBResult::DropIndex)
+        use crate::state_machine::{ApplyOutcome, ReplicatedCommand};
+        match self.apply_new(ReplicatedCommand::DropIndex { table: stmt.table_name, column: stmt.column_name })? {
+            ApplyOutcome::DropIndex => Ok(ReefDBResult::DropIndex),
+            _ => Err(ReefDBError::Other("Unexpected apply outcome".to_string())),
+        }
     }
 
     fn handle_savepoint(&mut self, name: String) -> Result<ReefDBResult, ReefDBError> {

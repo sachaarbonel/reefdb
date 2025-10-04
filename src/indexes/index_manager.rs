@@ -326,96 +326,17 @@ impl OnDiskIndexManager {
         Ok(())
     }
 
-    fn write_wal_entry(&self, entry: &IndexWALEntry) -> Result<(), ReefDBError> {
-        let wal_path = format!("{}.wal", self.index_path);
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&wal_path)
-            .map_err(|e| ReefDBError::IoError(e.to_string()))?;
-        
-        let mut writer = BufWriter::new(file);
-        bincode::serialize_into(&mut writer, entry)
-            .map_err(|e| ReefDBError::IoError(e.to_string()))?;
-        writer.flush().map_err(|e| ReefDBError::IoError(e.to_string()))?;
+    fn write_wal_entry(&self, _entry: &IndexWALEntry) -> Result<(), ReefDBError> {
+        // No-op: index WAL is disabled in favor of unified command logging
         Ok(())
     }
 
     fn recover_from_wal(&mut self) -> Result<(), ReefDBError> {
+        // No-op: index WAL is disabled. Remove any stale WAL file for cleanliness.
         let wal_path = format!("{}.wal", self.index_path);
-        if !Path::new(&wal_path).exists() {
-            return Ok(());
+        if Path::new(&wal_path).exists() {
+            let _ = std::fs::remove_file(wal_path);
         }
-
-        let mut file = File::open(&wal_path)
-            .map_err(|e| ReefDBError::IoError(e.to_string()))?;
-        
-        let mut active_txns: HashMap<u64, Vec<IndexUpdate>> = HashMap::new();
-        
-        loop {
-            match bincode::deserialize_from::<_, IndexWALEntry>(&mut file) {
-                Ok(entry) => {
-                    match entry.operation {
-                        IndexWALOperation::Begin => {
-                            active_txns.insert(entry.transaction_id, Vec::new());
-                        },
-                        IndexWALOperation::Update(update) => {
-                            if let Some(updates) = active_txns.get_mut(&entry.transaction_id) {
-                                updates.push(update);
-                            }
-                        },
-                        IndexWALOperation::Commit => {
-                            if let Some(updates) = active_txns.remove(&entry.transaction_id) {
-                                for update in updates {
-                                    self.apply_update(&update)?;
-                                }
-                            }
-                        },
-                        IndexWALOperation::Rollback => {
-                            active_txns.remove(&entry.transaction_id);
-                        }
-                    }
-                },
-                Err(_) => break, // End of file or corrupted entry
-            }
-        }
-
-        // Rollback any incomplete transactions
-        for (_txn_id, updates) in active_txns {
-            for update in updates.iter().rev() {
-                match update.operation_type {
-                    IndexOperationType::Insert => {
-                        if let Some(new_value) = &update.new_value {
-                            match self.get_index_internal_mut(&update.table_name, &update.column_name) {
-                                Some(IndexType::BTree(btree)) => {
-                                    btree.remove_entry(new_value.clone(), update.row_id);
-                                },
-                                Some(IndexType::GIN(gin)) => {
-                                    gin.remove_document(&update.table_name, &update.column_name, update.row_id);
-                                },
-                                None => return Err(ReefDBError::Other("Index not found".to_string())),
-                            }
-                        }
-                    },
-                    IndexOperationType::Update | IndexOperationType::Delete => {
-                        if let Some(old_value) = &update.old_value {
-                            match self.get_index_internal_mut(&update.table_name, &update.column_name) {
-                                Some(IndexType::BTree(btree)) => {
-                                    btree.add_entry(old_value.clone(), update.row_id);
-                                },
-                                Some(IndexType::GIN(gin)) => {
-                                    gin.add_document(&update.table_name, &update.column_name, update.row_id, std::str::from_utf8(old_value).unwrap_or_default());
-                                },
-                                None => return Err(ReefDBError::Other("Index not found".to_string())),
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Clear WAL after recovery
-        std::fs::remove_file(wal_path).map_err(|e| ReefDBError::IoError(e.to_string()))?;
         Ok(())
     }
 }
