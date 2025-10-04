@@ -57,6 +57,7 @@ pub mod fts;
 pub mod functions;
 pub mod state_machine;
 pub mod snapshot;
+pub mod distributed;
 #[cfg(test)]
 pub mod tests;
 

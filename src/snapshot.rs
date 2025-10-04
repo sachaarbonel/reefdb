@@ -2,13 +2,14 @@ use crate::error::ReefDBError;
 use crate::storage::{Storage, TableStorage};
 use crate::fts::search::Search;
 use crate::ReefDB;
+use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotMeta {
     pub last_applied_command: crate::state_machine::CommandId,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotData {
     pub tables: TableStorage,
 }

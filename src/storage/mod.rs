@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use crate::{sql::column_def::ColumnDef, sql::{data_value::DataValue, data_type::DataType}, error::ReefDBError};
+use serde::{Serialize, Deserialize};
 
 pub mod disk;
 pub mod memory;
 pub mod mmap;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TableStorage {
     pub tables: HashMap<String, (Vec<ColumnDef>, Vec<Vec<DataValue>>)>,
 }
