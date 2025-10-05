@@ -1,0 +1,11 @@
+syntax = "proto3";
+package reefdb.sql;
+
+message SqlRequest { string sql = 1; }
+message SqlResponse { bool ok = 1; string result = 2; }
+
+service Sql {
+  rpc Execute(SqlRequest) returns (SqlResponse);
+}
+
+

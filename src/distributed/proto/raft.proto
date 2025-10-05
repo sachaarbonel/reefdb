@@ -1,0 +1,19 @@
+syntax = "proto3";
+package reefdb.raft;
+
+message RaftMessage { bytes data = 1; }
+
+service Raft {
+  rpc Step(RaftMessage) returns (RaftMessage);
+  rpc InstallSnapshot(stream RaftMessage) returns (RaftMessage);
+  rpc GetInfo(RaftMessage) returns (LeadershipInfo);
+}
+
+message LeadershipInfo {
+  string role = 1;
+  uint64 term = 2;
+  uint64 commit_index = 3;
+  uint64 apply_index = 4;
+}
+
+
