@@ -8,6 +8,10 @@ use crate::ReefDB;
 use crate::distributed::types::{LeadershipInfo, NodeRole};
 #[cfg(feature = "raft-tikv")]
 use crate::distributed::network::transport::RaftTransport;
+#[cfg(feature = "raft-tikv")]
+use std::sync::Arc;
+#[cfg(feature = "raft-tikv")]
+use crate::distributed::config::NodeConfig;
 
 /// A minimal single-node Raft-like wrapper that provides the shape needed to integrate a real Raft implementation.
 ///
@@ -164,6 +168,19 @@ where
         Self { id, raw, raft_apply_index: 0, reef, peers, transport: None }
     }
 
+    pub fn new_with_config(node_cfg: &NodeConfig, reef: ReefDB<S, FTS>) -> Self {
+        use raft::{Config, storage::MemStorage, RawNode};
+        let mut cfg = Config::new(node_cfg.node_id);
+        cfg.id = node_cfg.node_id;
+        if let Some(e) = node_cfg.election_tick { cfg.election_tick = e as usize; }
+        if let Some(h) = node_cfg.heartbeat_tick { cfg.heartbeat_tick = h as usize; }
+        cfg.validate().expect("invalid raft config");
+        let peers: Vec<u64> = node_cfg.peers.iter().map(|p| p.node_id).collect();
+        let storage = MemStorage::new_with_conf_state((peers.clone(), vec![]));
+        let raw = RawNode::new(&cfg, storage, &raft::default_logger()).expect("rawnode");
+        Self { id: node_cfg.node_id, raw, raft_apply_index: 0, reef, peers, transport: None }
+    }
+
     pub fn start(&mut self) {
         let _ = self.raw.campaign();
     }
@@ -229,5 +246,28 @@ where
             apply_index: self.raft_apply_index,
         }
     }
+}
+
+/// Spawn a background loop to drive Raft ticks and readiness processing.
+/// The caller controls the tick cadence via `interval` to align with configured heartbeat/election ticks.
+#[cfg(feature = "raft-tikv")]
+pub fn spawn_raft_background<S, FTS>(
+    node: Arc<tokio::sync::Mutex<RealRaftNode<S, FTS>>>,
+    interval: std::time::Duration,
+) -> tokio::task::JoinHandle<()>
+where
+    S: Storage + crate::indexes::index_manager::IndexManager + Clone + 'static,
+    FTS: Search + Clone,
+    FTS::NewArgs: Clone + Default,
+{
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        loop {
+            ticker.tick().await;
+            let mut guard = node.lock().await;
+            guard.tick();
+            let _ = guard.on_ready();
+        }
+    })
 }
 

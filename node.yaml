@@ -1,0 +1,7 @@
+node_id: 1
+data_dir: /Users/sachaarbonel/rust-dev/reefdb/test_db/test.db
+raft_dir: /Users/sachaarbonel/rust-dev/reefdb/test_db/raft
+rpc_addr: 127.0.0.1:50051
+http_addr: 127.0.0.1:8080
+peers:
+  - { node_id: 1, addr: 127.0.0.1:50051 }
