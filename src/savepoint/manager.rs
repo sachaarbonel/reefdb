@@ -5,6 +5,7 @@ use crate::{
 };
 use super::savepoint::{Savepoint, SavepointState};
 
+#[derive(Clone)]
 pub struct SavepointManager {
     savepoints: HashMap<u64, Vec<Savepoint>>,
 }

@@ -1,7 +1,7 @@
 use nom::{
     branch::alt,
-    bytes::complete::{tag, tag_no_case, take_while1},
-    character::complete::{multispace0, multispace1, alphanumeric1, digit1},
+    bytes::complete::{tag, tag_no_case},
+    character::complete::{multispace0, digit1},
     combinator::{map, opt, value, recognize},
     multi::separated_list0,
     number::complete::double,
@@ -13,10 +13,8 @@ use std::{fmt, cmp::Ordering};
 use crate::fts::text_processor::{TsVector, TSQuery};
 
 use crate::sql::{
-    column_def::table_name,
-    column_value_pair::{ColumnValuePair, identifier},
-    table_reference::TableReference,
     data_type::DataType,
+    parser_utils::{ident, ident_allow_dot},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -201,7 +199,7 @@ impl DataValue {
 
     pub fn parse_function(input: &str) -> IResult<&str, DataValue> {
         let (input, (name, _, args)) = tuple((
-            preceded(multispace0, identifier),
+            preceded(multispace0, ident),
             preceded(multispace0, tag("(")),
             delimited(
                 multispace0,
@@ -215,7 +213,7 @@ impl DataValue {
                         Self::parse_float,
                         Self::parse_boolean,
                         Self::parse_null,
-                        map(identifier, |s: &str| DataValue::Text(s.to_string())),
+                        map(ident_allow_dot, |s: &str| DataValue::Text(s.to_string())),
                     )),
                 ),
                 tuple((multispace0, tag(")"))),
@@ -238,7 +236,7 @@ impl DataValue {
                 delimited(multispace0, tag(","), multispace0),
                 alt((
                     Self::parse_float,
-                    map(identifier, |s: &str| DataValue::Text(s.to_string())),
+                    map(ident, |s: &str| DataValue::Text(s.to_string())),
                 )),
             ),
             tuple((multispace0, tag("]"), multispace0)),

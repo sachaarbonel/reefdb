@@ -1,10 +1,7 @@
-mod savepoint_handler;
 mod state_handler;
 
-pub use savepoint_handler::SavepointHandler;
 pub use state_handler::{TransactionState, TransactionStateHandler, IsolationLevel};
 use crate::fts::search::Search;
-use crate::sql::clauses::order_by;
 use crate::{
     error::ReefDBError,
     result::ReefDBResult,
@@ -26,7 +23,7 @@ use crate::{
     ReefDB,
     acid::AcidManager,
     TableStorage,
-    savepoint::{Savepoint, SavepointState},
+    savepoint::SavepointManager,
 };
 
 #[derive(Clone)]
@@ -35,7 +32,7 @@ where
     FTS::NewArgs: Clone,
 {
     pub(crate) state_handler: TransactionStateHandler,
-    pub(crate) savepoint_handler: SavepointHandler,
+    pub(crate) savepoint_manager: SavepointManager,
     pub(crate) reef_db: ReefDB<S, FTS>,
     pub(crate) acid_manager: AcidManager,
 }
@@ -47,12 +44,12 @@ where
     pub fn create(reef_db: ReefDB<S, FTS>, isolation_level: IsolationLevel) -> Self {
         let id = rand::random::<u64>();
         let state_handler = TransactionStateHandler::new(id, isolation_level);
-        let savepoint_handler = SavepointHandler::new();
+        let savepoint_manager = SavepointManager::new();
         let acid_manager = AcidManager::new(reef_db.tables.clone(), isolation_level);
 
         let mut transaction = Transaction {
             state_handler,
-            savepoint_handler,
+            savepoint_manager,
             reef_db: reef_db.clone(),
             acid_manager,
         };
@@ -85,7 +82,8 @@ where
             }
         }
         
-        self.savepoint_handler.create_savepoint(name, storage_state)
+        self.savepoint_manager
+            .create_savepoint(self.get_id(), name, storage_state)
     }
 
     pub fn rollback_to_savepoint(&mut self, name: &str) -> Result<(), ReefDBError> {
@@ -93,7 +91,9 @@ where
             return Err(ReefDBError::TransactionNotActive);
         }
         
-        let (snapshot, _) = self.savepoint_handler.rollback_to_savepoint(name)?;
+        let snapshot = self
+            .savepoint_manager
+            .rollback_to_savepoint(self.get_id(), name)?;
         
         // Now restore the database state
         self.reef_db.tables = TableStorage::new();
@@ -120,7 +120,8 @@ where
             return Err(ReefDBError::TransactionNotActive);
         }
         
-        self.savepoint_handler.release_savepoint(name)
+        self.savepoint_manager
+            .release_savepoint(self.get_id(), name)
     }
 
     pub fn commit(&mut self, reef_db: &mut ReefDB<S, FTS>) -> Result<(), ReefDBError> {

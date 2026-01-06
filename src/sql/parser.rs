@@ -1,4 +1,3 @@
-use nom::IResult;
 use crate::sql::statements::Statement;
 use crate::error::ReefDBError;
 
@@ -11,10 +10,13 @@ impl Parser {
                 if remaining.trim().is_empty() {
                     Ok(stmt)
                 } else {
-                    Err(ReefDBError::Other(format!("Unexpected input after statement: {}", remaining)))
+                    Err(ReefDBError::Parse(format!(
+                        "Unexpected input after statement: {}",
+                        remaining
+                    )))
                 }
             }
-            Err(e) => Err(ReefDBError::Other(format!("Failed to parse SQL: {}", e))),
+            Err(e) => Err(ReefDBError::Parse(format!("Failed to parse SQL: {:?}", e))),
         }
     }
-} 
+}

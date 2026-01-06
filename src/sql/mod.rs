@@ -11,4 +11,5 @@ pub mod data_type;
 pub mod constraints;
 pub mod table;
 pub mod function_parser;
+pub mod parser_utils;
 pub use self::statements::Statement;

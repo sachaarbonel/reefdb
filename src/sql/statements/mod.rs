@@ -6,11 +6,11 @@ use self::{
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag_no_case, take_while1},
+    bytes::complete::tag_no_case,
     character::complete::{multispace0, multispace1},
-    sequence::{preceded, tuple},
     IResult,
 };
+use crate::sql::parser_utils::ident;
 
 pub mod create;
 pub mod delete;
@@ -58,21 +58,21 @@ fn parse_commit(input: &str) -> IResult<&str, Statement> {
 fn parse_savepoint(input: &str) -> IResult<&str, Statement> {
     let (input, _) = tag_no_case("SAVEPOINT")(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, name) = take_while1(|c: char| c.is_alphanumeric() || c == '_')(input)?;
+    let (input, name) = ident(input)?;
     Ok((input, Statement::Savepoint(SavepointStatement { name: name.to_string() })))
 }
 
 fn parse_rollback_to_savepoint(input: &str) -> IResult<&str, Statement> {
     let (input, _) = tag_no_case("ROLLBACK TO SAVEPOINT")(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, name) = take_while1(|c: char| c.is_alphanumeric() || c == '_')(input)?;
+    let (input, name) = ident(input)?;
     Ok((input, Statement::RollbackToSavepoint(name.to_string())))
 }
 
 fn parse_release_savepoint(input: &str) -> IResult<&str, Statement> {
     let (input, _) = tag_no_case("RELEASE SAVEPOINT")(input)?;
     let (input, _) = multispace1(input)?;
-    let (input, name) = take_while1(|c: char| c.is_alphanumeric() || c == '_')(input)?;
+    let (input, name) = ident(input)?;
     Ok((input, Statement::ReleaseSavepoint(name.to_string())))
 }
 

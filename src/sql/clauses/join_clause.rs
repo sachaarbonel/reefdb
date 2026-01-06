@@ -1,19 +1,16 @@
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case},
-    character::complete::{multispace0, multispace1, alphanumeric1, alpha1},
-    combinator::{opt, value, recognize},
-    multi::many0,
+    character::complete::{multispace0, multispace1},
+    combinator::{opt, value},
     sequence::{preceded, tuple},
     IResult,
 };
 use serde::{Deserialize, Serialize};
-use std::fmt;
-
 use crate::sql::{
-    column_def::table_name,
     column_value_pair::ColumnValuePair,
     table_reference::TableReference,
+    parser_utils::ident,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -61,10 +58,10 @@ impl JoinClause {
         let (input, _) = multispace1(input)?;
         let (input, _) = tag_no_case("JOIN")(input)?;
         let (input, _) = multispace1(input)?;
-        let (input, table_name) = identifier(input)?;
+        let (input, table_name) = ident(input)?;
         let (input, alias) = opt(preceded(
             tuple((multispace1, tag_no_case("AS"), multispace1)),
-            identifier
+            ident
         ))(input)?;
         let (input, _) = multispace1(input)?;
         let (input, _) = tag_no_case("ON")(input)?;
@@ -87,15 +84,6 @@ impl JoinClause {
             },
         ))
     }
-}
-
-fn identifier(input: &str) -> IResult<&str, &str> {
-    recognize(
-        tuple((
-            alpha1,
-            many0(alt((alphanumeric1, tag("_"))))
-        ))
-    )(input)
 }
 
 #[cfg(test)]

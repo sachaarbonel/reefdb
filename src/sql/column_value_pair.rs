@@ -1,10 +1,11 @@
 use nom::{
-    bytes::complete::{tag, take_while1},
+    bytes::complete::tag,
     combinator::opt,
     sequence::tuple,
     IResult,
 };
 use serde::{Deserialize, Serialize};
+use crate::sql::parser_utils::ident;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColumnValuePair {
@@ -21,14 +22,10 @@ impl ColumnValuePair {
     }
 }
 
-pub fn identifier(input: &str) -> IResult<&str, &str> {
-    take_while1(|c: char| c.is_alphanumeric() || c == '_')(input)
-}
-
 impl ColumnValuePair {
     pub fn parse(input: &str) -> IResult<&str, ColumnValuePair> {
         let (input, (table_part, column)) =
-            tuple((opt(tuple((identifier, tag(".")))), identifier))(input)?;
+            tuple((opt(tuple((ident, tag(".")))), ident))(input)?;
 
         let table_name = table_part
             .map(|(table, _)| table.to_string())

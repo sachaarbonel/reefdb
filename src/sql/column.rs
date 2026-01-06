@@ -3,14 +3,14 @@
 use nom::{
     IResult,
     branch::alt,
-    bytes::complete::{tag, tag_no_case},
-    character::complete::{alpha1, alphanumeric1, multispace0, multispace1},
-    combinator::{map, opt, recognize},
-    multi::many0,
-    sequence::{tuple, delimited},
+    bytes::complete::tag,
+    character::complete::multispace0,
+    combinator::{map, opt},
+    sequence::tuple,
 };
 use crate::sql::data_value::DataValue;
 use super::function_parser::{parse_function, FunctionCall};
+use crate::sql::parser_utils::{ident, ident_ws};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Column {
@@ -69,10 +69,10 @@ impl Column {
     pub fn parse_table_column(input: &str) -> IResult<&str, Self> {
         let (input, _) = multispace0(input)?;
         let (input, table) = opt(tuple((
-            identifier_no_space,
+            ident,
             tag(".")
         )))(input)?;
-        let (input, name) = identifier_no_space(input)?;
+        let (input, name) = ident(input)?;
         let (input, _) = multispace0(input)?;
 
         Ok((input, Column {
@@ -83,30 +83,13 @@ impl Column {
     }
 
     fn parse_regular_column(input: &str) -> IResult<&str, Self> {
-        let (input, name) = identifier(input)?;
+        let (input, name) = ident_ws(input)?;
         Ok((input, Column {
             table: None,
             name: name.to_string(),
             column_type: ColumnType::Regular(name.to_string()),
         }))
     }
-}
-
-fn identifier(input: &str) -> IResult<&str, &str> {
-    delimited(
-        multispace0,
-        identifier_no_space,
-        multispace0
-    )(input)
-}
-
-fn identifier_no_space(input: &str) -> IResult<&str, &str> {
-    recognize(
-        tuple((
-            alt((alpha1, tag("_"))),
-            many0(alt((alphanumeric1, tag("_")))),
-        ))
-    )(input)
 }
 
 #[cfg(test)]

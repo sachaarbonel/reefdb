@@ -6,6 +6,7 @@ use crate::key_format::KeyFormat;
 use crate::transaction::IsolationLevel;
 use crate::mvcc::version::{Version, VersionStore};
 use crate::mvcc::transaction_state::TransactionState;
+use log::{debug, info};
 
 pub struct MVCCManager {
     version_store: VersionStore,
@@ -31,49 +32,21 @@ impl MVCCManager {
     }
 
     pub fn commit(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        println!("[DEBUG] Committing transaction {}", transaction_id);
+        info!("Committing transaction {}", transaction_id);
         // Update the timestamp for all versions of this transaction
         if let Some(keys) = self.transaction_state.get_transaction_writes(transaction_id) {
-            println!("[DEBUG] Found keys to update for transaction {}: {:?}", transaction_id, keys);
             let commit_time = SystemTime::now();
-            for key in keys {
-                if let Some(versions) = self.version_store.get_versions_mut(&key) {
-                    println!("[DEBUG] Updating versions for key {}", key);
-                    // First, find and remove all versions for this transaction
-                    let mut tx_versions: Vec<_> = versions.iter()
-                        .filter(|v| v.transaction_id == transaction_id)
-                        .cloned()
-                        .collect();
-                    
-                    println!("[DEBUG] Found {} versions to update", tx_versions.len());
-                    
-                    // Update their timestamps
-                    for version in tx_versions.iter_mut() {
-                        version.timestamp = commit_time;
-                        println!("[DEBUG] Updated version timestamp to {:?}", version.timestamp);
-                    }
-                    
-                    // Remove old versions
-                    versions.retain(|v| v.transaction_id != transaction_id);
-                    
-                    // Re-insert updated versions in the correct order
-                    for version in tx_versions {
-                        // We want newer timestamps first, and for equal timestamps, lower transaction IDs first
-                        let insert_pos = versions.binary_search_by(|v| {
-                            match version.timestamp.cmp(&v.timestamp) {
-                                std::cmp::Ordering::Equal => v.transaction_id.cmp(&version.transaction_id),
-                                ord => ord
-                            }
-                        }).unwrap_or_else(|pos| pos);
-                        versions.insert(insert_pos, version);
-                    }
-                    println!("[DEBUG] Re-inserted versions in correct order");
-                }
-            }
+            debug!(
+                "Updating version timestamps for transaction {} with keys {:?}",
+                transaction_id,
+                keys
+            );
+            self.version_store
+                .retimestamp_transaction_versions(keys, transaction_id, commit_time);
         }
         // First commit the transaction to update its state
         self.transaction_state.commit_transaction(transaction_id)?;
-        println!("[DEBUG] Transaction {} committed successfully", transaction_id);
+        info!("Transaction {} committed successfully", transaction_id);
         Ok(())
     }
 
@@ -85,18 +58,21 @@ impl MVCCManager {
     }
 
     pub fn write(&mut self, transaction_id: u64, key: String, value: Vec<DataValue>) -> Result<(), ReefDBError> {
-        println!("[DEBUG] Writing value {:?} for key {} in transaction {}", value, key, transaction_id);
+        debug!(
+            "Writing value {:?} for key {} in transaction {}",
+            value, key, transaction_id
+        );
         if !self.transaction_state.is_transaction_active(transaction_id) {
             return Err(ReefDBError::Other("Transaction not found".to_string()));
         }
 
         if let Some(KeyFormat::Row { table_name, version: _, primary_key }) = KeyFormat::parse(&key) {
             let base_key = KeyFormat::row(&table_name, 0, &primary_key);
-            println!("[DEBUG] Using base key: {}", base_key);
+            debug!("Using base key: {}", base_key);
             
             // Create a new version with current timestamp
             let version = Version::new(transaction_id, value);
-            println!("[DEBUG] Created new version with timestamp {:?}", version.timestamp);
+            debug!("Created new version with timestamp {:?}", version.timestamp);
             
             // Store the version - the VersionStore will handle proper ordering
             self.version_store.store_version(base_key.clone(), version);
@@ -109,26 +85,31 @@ impl MVCCManager {
     }
 
     pub fn read_committed(&self, transaction_id: u64, key: &str) -> Result<Option<Vec<DataValue>>, ReefDBError> {
-        println!("[DEBUG] Reading committed value for key {} in transaction {}", key, transaction_id);
+        debug!(
+            "Reading committed value for key {} in transaction {}",
+            key, transaction_id
+        );
         if let Some(KeyFormat::Row { table_name, version: _, primary_key }) = KeyFormat::parse(key) {
             let base_key = KeyFormat::row(&table_name, 0, &primary_key);
-            println!("[DEBUG] Using base key: {}", base_key);
+            debug!("Using base key: {}", base_key);
             
             // Get the committed transactions
             let committed_transactions = self.transaction_state.get_committed_transactions();
-            println!("[DEBUG] Committed transactions: {:?}", committed_transactions);
+            debug!("Committed transactions: {:?}", committed_transactions);
             
             // Get the latest committed version
             if let Some(version) = self.version_store.get_latest_committed_version(&base_key, &committed_transactions) {
-                println!("[DEBUG] Found committed version: tx_id={}, value={:?}, timestamp={:?}", 
-                    version.transaction_id, version.value, version.timestamp);
+                debug!(
+                    "Found committed version: tx_id={}, value={:?}, timestamp={:?}",
+                    version.transaction_id, version.value, version.timestamp
+                );
                 Ok(Some(version.value.clone()))
             } else {
-                println!("[DEBUG] No committed version found");
+                debug!("No committed version found");
                 Ok(None)
             }
         } else {
-            println!("[DEBUG] Invalid key format");
+            debug!("Invalid key format");
             Ok(None)
         }
     }

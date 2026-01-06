@@ -1,7 +1,8 @@
-use nom::{IResult, bytes::complete::{tag_no_case, tag}, character::complete::{multispace1, alphanumeric1}};
+use nom::{IResult, bytes::complete::{tag_no_case, tag}, character::complete::multispace1};
 use serde::{Deserialize, Serialize};
 
 use super::constraint::Constraint;
+use crate::sql::parser_utils::ident;
 
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -15,12 +16,12 @@ impl ForeignKeyConstraint {
         let (input, _) = tag_no_case("FOREIGN KEY")(input)?;
         let (input, _) = multispace1(input)?;
         let (input, _) = tag("(")(input)?; // expect an opening parenthesis
-        let (input, referenced_column) = alphanumeric1(input)?;
+        let (input, referenced_column) = ident(input)?;
         let (input, _) = tag(")")(input)?; // expect a closing parenthesis
         let (input, _) = multispace1(input)?;
         let (input, _) = tag_no_case("REFERENCES")(input)?;
         let (input, _) = multispace1(input)?;
-        let (input, referenced_table) = alphanumeric1(input)?;
+        let (input, referenced_table) = ident(input)?;
 
         Ok((
             input,

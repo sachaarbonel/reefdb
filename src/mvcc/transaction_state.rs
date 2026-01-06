@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 use crate::error::ReefDBError;
 use crate::transaction::IsolationLevel;
+use log::debug;
 
 pub struct TransactionState {
     transaction_writes: HashMap<u64, HashSet<String>>,
@@ -34,12 +35,15 @@ impl TransactionState {
     }
 
     pub fn begin_transaction(&mut self, transaction_id: u64) {
-        println!("[DEBUG] Beginning transaction: {}", transaction_id);
+        debug!("Beginning transaction: {}", transaction_id);
         self.active_transactions.insert(transaction_id);
         self.transaction_timestamps.insert(transaction_id, SystemTime::now());
         // Default to READ COMMITTED if not specified
         self.transaction_isolation_levels.insert(transaction_id, IsolationLevel::ReadCommitted);
-        println!("[DEBUG] Transaction {} started. Active transactions: {:?}", transaction_id, self.active_transactions);
+        debug!(
+            "Transaction {} started. Active transactions: {:?}",
+            transaction_id, self.active_transactions
+        );
     }
 
     pub fn set_isolation_level(&mut self, transaction_id: u64, isolation_level: IsolationLevel) {
@@ -51,16 +55,18 @@ impl TransactionState {
     }
 
     pub fn commit_transaction(&mut self, transaction_id: u64) -> Result<(), ReefDBError> {
-        println!("[DEBUG] Committing transaction: {}", transaction_id);
+        debug!("Committing transaction: {}", transaction_id);
         if !self.active_transactions.contains(&transaction_id) {
-            println!("[DEBUG] Error: Transaction {} not active", transaction_id);
+            debug!("Error: Transaction {} not active", transaction_id);
             return Err(ReefDBError::TransactionNotActive);
         }
 
         self.active_transactions.remove(&transaction_id);
         self.committed_transactions.insert(transaction_id);
-        println!("[DEBUG] Transaction {} committed. Active transactions: {:?}, Committed transactions: {:?}", 
-            transaction_id, self.active_transactions, self.committed_transactions);
+        debug!(
+            "Transaction {} committed. Active transactions: {:?}, Committed transactions: {:?}",
+            transaction_id, self.active_transactions, self.committed_transactions
+        );
         Ok(())
     }
 
@@ -107,7 +113,7 @@ impl TransactionState {
     }
 
     pub fn get_committed_transactions(&self) -> &HashSet<u64> {
-        println!("[DEBUG] Getting committed transactions: {:?}", self.committed_transactions);
+        debug!("Getting committed transactions: {:?}", self.committed_transactions);
         &self.committed_transactions
     }
 

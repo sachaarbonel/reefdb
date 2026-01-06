@@ -18,6 +18,7 @@ pub enum ReefDBError {
     Deadlock,
     LockConflict(String),
     InvalidIsolationLevel(String),
+    Parse(String),
     Other(String),
     WriteConflict(String),
 }
@@ -40,6 +41,7 @@ impl fmt::Display for ReefDBError {
             ReefDBError::Deadlock => write!(f, "Transaction aborted due to deadlock"),
             ReefDBError::LockConflict(msg) => write!(f, "Lock conflict: {}", msg),
             ReefDBError::InvalidIsolationLevel(level) => write!(f, "Invalid isolation level: {}", level),
+            ReefDBError::Parse(msg) => write!(f, "Parse error: {}", msg),
             ReefDBError::Other(msg) => write!(f, "{}", msg),
             ReefDBError::WriteConflict(msg) => write!(f, "Write conflict: {}", msg),
         }

@@ -1,8 +1,8 @@
 use std::time::SystemTime;
 use std::collections::{HashMap, HashSet};
 use crate::sql::data_value::DataValue;
-use crate::error::ReefDBError;
 use crate::key_format::KeyFormat;
+use log::debug;
 
 #[derive(Debug, Clone)]
 pub struct Version {
@@ -70,22 +70,44 @@ impl VersionStore {
     }
 
     pub fn store_version(&mut self, key: String, version: Version) {
-        println!("[DEBUG] Storing version for key: {}, tx_id: {}", key, version.transaction_id);
+        debug!("Storing version for key: {}, tx_id: {}", key, version.transaction_id);
         let versions = self.versions.entry(key.clone()).or_insert_with(Vec::new);
         
         // Remove any existing versions from this transaction
         versions.retain(|v| v.transaction_id != version.transaction_id);
         
-        // Find the correct position to insert the new version
-        // We want newer timestamps first, and for equal timestamps, lower transaction IDs first
-        let insert_pos = versions.binary_search_by(|v| {
-            match version.timestamp.cmp(&v.timestamp) {
-                std::cmp::Ordering::Equal => v.transaction_id.cmp(&version.transaction_id),
-                ord => ord
+        Self::insert_version_sorted(versions, version);
+        debug!("Current versions for key {}: {:?}", key, versions);
+    }
+
+    pub fn retimestamp_transaction_versions(
+        &mut self,
+        keys: &HashSet<String>,
+        transaction_id: u64,
+        commit_time: SystemTime,
+    ) {
+        for key in keys {
+            if let Some(versions) = self.versions.get_mut(key) {
+                let mut tx_versions: Vec<_> = versions
+                    .iter()
+                    .filter(|v| v.transaction_id == transaction_id)
+                    .cloned()
+                    .collect();
+
+                if tx_versions.is_empty() {
+                    continue;
+                }
+
+                for version in tx_versions.iter_mut() {
+                    version.timestamp = commit_time;
+                }
+
+                versions.retain(|v| v.transaction_id != transaction_id);
+                for version in tx_versions {
+                    Self::insert_version_sorted(versions, version);
+                }
             }
-        }).unwrap_or_else(|pos| pos);
-        versions.insert(insert_pos, version);
-        println!("[DEBUG] Current versions for key {}: {:?}", key, versions);
+        }
     }
 
     pub fn get_latest_committed_version(&self, key: &str, committed_transactions: &HashSet<u64>) -> Option<&Version> {
@@ -170,6 +192,13 @@ impl VersionStore {
         self.versions.get(key)
             .and_then(|versions| versions.iter()
                 .find(|v| committed_transactions.contains(&v.transaction_id) && v.timestamp <= start_time))
+    }
+
+    fn insert_version_sorted(versions: &mut Vec<Version>, version: Version) {
+        let insert_pos = versions
+            .binary_search_by(|v| v.cmp(&version))
+            .unwrap_or_else(|pos| pos);
+        versions.insert(insert_pos, version);
     }
 }
 

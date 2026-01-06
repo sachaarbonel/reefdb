@@ -2,9 +2,9 @@ use nom::IResult;
 use nom::{
     branch::alt,
     bytes::complete::{tag, tag_no_case},
-    character::complete::{alpha1, alphanumeric1, multispace0, multispace1},
-    combinator::{map, opt, recognize},
-    multi::{many0, separated_list0, separated_list1},
+    character::complete::{multispace0, multispace1},
+    combinator::{map, opt},
+    multi::{many0, separated_list1},
     sequence::{delimited, preceded, terminated, tuple},
 };
 use crate::sql::{
@@ -16,7 +16,7 @@ use crate::sql::{
     column::{Column, ColumnType},
     data_value::DataValue,
     table_reference::TableReference,
-    operators::op::Op,
+    parser_utils::ident,
 };
 use crate::sql::statements::Statement;
 
@@ -61,24 +61,15 @@ impl SelectStatement {
 }
 
 fn parse_table_reference(input: &str) -> IResult<&str, TableReference> {
-    let (input, name) = identifier(input)?;
+    let (input, name) = ident(input)?;
     let (input, alias) = opt(preceded(
         delimited(multispace0, tag_no_case("AS"), multispace1),
-        identifier
+        ident
     ))(input)?;
     Ok((input, TableReference {
         name: name.to_string(),
         alias: alias.map(|a| a.to_string()),
     }))
-}
-
-fn identifier(input: &str) -> IResult<&str, &str> {
-    recognize(
-        tuple((
-            alpha1,
-            many0(alt((alphanumeric1, tag("_"))))
-        ))
-    )(input)
 }
 
 fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
@@ -102,7 +93,7 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
                         DataValue::parse_function,
                         opt(preceded(
                             delimited(multispace0, tag_no_case("as"), multispace1),
-                            identifier
+                            ident
                         ))
                     )),
                     |(func, alias)| match func {
@@ -132,8 +123,8 @@ fn parse_column_list(input: &str) -> IResult<&str, Vec<Column>> {
                 // Handle regular columns with optional table prefix
                 map(
                     tuple((
-                        opt(terminated(identifier, tag("."))),
-                        identifier
+                        opt(terminated(ident, tag("."))),
+                        ident
                     )),
                     |(table, name)| Column {
                         table: table.map(|t| t.to_string()),
@@ -155,6 +146,7 @@ mod tests {
             order_by::{OrderByClause, OrderDirection},
         },
         column::Column,
+        operators::op::Op,
         statements::Statement,
     };
 

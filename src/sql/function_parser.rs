@@ -7,9 +7,9 @@ use nom::{
     multi::separated_list0,
     sequence::{delimited, tuple},
     IResult,
-    error::Error,
 };
 use crate::sql::data_value::DataValue;
+use crate::sql::parser_utils::{ident, ident_allow_dot};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,33 +19,14 @@ pub struct FunctionCall {
     pub alias: Option<String>,
 }
 
-// Identifier characters for arguments (allowing dots for table.column)
-fn is_argument_identifier_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_' || c == '.'
-}
-
-// Identifier for function names (no dots)
-fn is_function_identifier_char(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-// Parser for identifiers (used for aliases)
-fn identifier_no_space(input: &str) -> IResult<&str, &str> {
-    nom::bytes::complete::take_while1(is_argument_identifier_char)(input)
-}
-
 // Parser for function names (no dots)
 fn function_identifier(input: &str) -> IResult<&str, &str> {
-    nom::bytes::complete::take_while1(is_function_identifier_char)(input)
+    ident(input)
 }
 
 // Parser for arguments (allows dots)
-fn identifier(input: &str) -> IResult<&str, &str> {
-    delimited(
-        multispace0,
-        identifier_no_space,
-        multispace0
-    )(input)
+fn argument_identifier(input: &str) -> IResult<&str, &str> {
+    delimited(multispace0, ident_allow_dot, multispace0)(input)
 }
 
 // Parser for a single argument
@@ -64,7 +45,7 @@ fn parse_argument(input: &str) -> IResult<&str, DataValue> {
             name: f.name,
             args: f.args,
         }),
-        map(identifier, |s: &str| DataValue::Text(s.to_string())),
+        map(argument_identifier, |s: &str| DataValue::Text(s.to_string())),
     ))(input)
 }
 
@@ -97,7 +78,7 @@ pub fn parse_function(input: &str) -> IResult<&str, FunctionCall> {
         multispace1,
         tag_no_case("as"),
         multispace1,
-        identifier_no_space
+        ident
     )))(input)?;
     let alias = alias.map(|(_, _, _, alias)| alias.to_string());
     Ok((input, FunctionCall {

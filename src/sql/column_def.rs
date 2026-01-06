@@ -1,15 +1,13 @@
 use nom::{
-    branch::alt,
-    bytes::complete::{tag, tag_no_case},
-    character::complete::{alpha1, alphanumeric1, multispace1},
-    combinator::{opt, recognize},
-    multi::{many0, separated_list0},
-    sequence::{preceded, tuple},
+    character::complete::multispace1,
+    combinator::opt,
+    multi::separated_list0,
+    sequence::preceded,
     IResult,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{data_type::DataType, constraints::constraint::Constraint};
+use super::{data_type::DataType, constraints::constraint::Constraint, parser_utils::ident};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ColumnDef {
@@ -20,18 +18,11 @@ pub struct ColumnDef {
 
 
 pub fn table_name(input: &str) -> IResult<&str, &str> {
-    recognize(tuple((
-        alpha1,
-        many0(alt((alphanumeric1, tag("_")))),
-        opt(preceded(tag("."), alpha1)),
-    )))(input)
+    ident(input)
 }
 
 pub fn column_name(input: &str) -> IResult<&str, &str> {
-    recognize(tuple((
-        alt((alpha1, tag("_"))),
-        many0(alt((alphanumeric1, tag("_")))),
-    )))(input)
+    ident(input)
 }
 
 impl ColumnDef {
